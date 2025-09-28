@@ -13,6 +13,7 @@ class EntwareSSHInterface:
     """
     A thread-safe, robust interface for managing a persistent SSH connection
     to an Entware environment, with automatic reconnection and command timeouts.
+    This class is designed to be managed by a connection pool.
     """
     def __init__(self, host, username, password, ssh_port=22, keepalive_interval=30, connect_timeout=10):
         """
@@ -27,9 +28,10 @@ class EntwareSSHInterface:
 
         self._ssh_client = None
         self._is_connected = False
-        self._lock = threading.RLock()  # Re-entrant lock for safe nested calls
+        self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._connection_thread = None
+        self.last_used = time.time()
 
     def _create_ssh_client(self):
         """Creates and configures a new Paramiko SSH client instance."""
@@ -62,7 +64,7 @@ class EntwareSSHInterface:
                 self._stop_event.clear()
                 self._connection_thread = threading.Thread(
                     target=self._manage_connection,
-                    name="SSHConnectionManager",
+                    name=f"SSHConnectionManager-{self.host}",
                     daemon=True
                 )
                 self._connection_thread.start()
@@ -72,13 +74,13 @@ class EntwareSSHInterface:
                 if self._ssh_client:
                     self._ssh_client.close()
                 self._ssh_client = None
-                raise  # Re-raise the exception to the caller
+                raise
 
     def disconnect(self):
         """
         Stops the connection manager and closes the SSH connection.
         """
-        logging.info("Disconnecting...")
+        logging.info(f"Disconnecting from {self.host}...")
         with self._lock:
             if not self._connection_thread:
                 logging.info("Not connected.")
@@ -87,9 +89,8 @@ class EntwareSSHInterface:
             self._stop_event.set()
             thread = self._connection_thread
 
-        # Wait for the thread to finish outside the lock to avoid deadlocks
         if thread:
-            thread.join()
+            thread.join(timeout=5.0) # Add a timeout to prevent hanging
 
         with self._lock:
             if self._ssh_client:
@@ -101,25 +102,54 @@ class EntwareSSHInterface:
 
     def execute_command(self, command, timeout=15):
         """
-        Executes a command on the remote device with a timeout.
+        Executes a command on the remote device with a robust timeout.
         Returns (stdout, stderr) or (None, error_message) on failure.
         """
         with self._lock:
-            if not self._is_connected or not self._ssh_client:
+            self.last_used = time.time()
+            if not self.is_connected():
                 logging.warning("Cannot execute command: SSH client is not connected.")
                 return None, "Not connected"
 
-            transport = self._ssh_client.get_transport()
-            if not transport or not transport.is_active():
-                logging.warning("Cannot execute command: SSH transport is not active.")
-                return None, "Transport not active"
-
             try:
-                _, stdout, stderr = self._ssh_client.exec_command(command, timeout=timeout)
-                return stdout.read().decode(), stderr.read().decode()
+                stdin, stdout, stderr = self._ssh_client.exec_command(command, timeout=timeout)
+                channel = stdout.channel
+
+                start_time = time.time()
+                while not channel.exit_status_ready():
+                    if time.time() > start_time + timeout:
+                        channel.close()
+                        raise TimeoutError(f"Command '{command}' timed out after {timeout} seconds")
+                    time.sleep(0.1)
+
+                stdout_data = stdout.read().decode()
+                stderr_data = stderr.read().decode()
+
+                exit_status = channel.recv_exit_status()
+                if exit_status != 0:
+                    logging.warning(f"Command '{command}' exited with status {exit_status}. Stderr: {stderr_data.strip()}")
+
+                return stdout_data, stderr_data
+
+            except TimeoutError as e:
+                logging.error(f"Timeout executing command '{command}': {e}")
+                return None, str(e)
             except Exception as e:
                 logging.error(f"Failed to execute command '{command}': {e}")
                 return None, str(e)
+
+    def is_connected(self):
+        """
+        Checks if the SSH transport is active. Thread-safe.
+        """
+        with self._lock:
+            if not self._is_connected or not self._ssh_client:
+                return False
+            try:
+                transport = self._ssh_client.get_transport()
+                return transport.is_active() if transport else False
+            except EOFError:
+                return False
 
     def _manage_connection(self):
         """
@@ -127,37 +157,29 @@ class EntwareSSHInterface:
         and triggers reconnection on failure.
         """
         while not self._stop_event.is_set():
-            is_active = False
-            with self._lock:
-                if self._is_connected and self._ssh_client:
-                    try:
-                        is_active = self._ssh_client.get_transport().is_active()
-                    except EOFError:
-                        logging.warning("Connection check failed with EOFError.")
-                        is_active = False
-
-            if is_active:
-                self.execute_command("echo 'keepalive'", timeout=10)
-            else:
+            if not self.is_connected():
                 logging.warning("Connection lost. Starting reconnection process.")
                 self._handle_reconnection()
+            else:
+                try:
+                    # Use Paramiko's built-in keepalive mechanism
+                    self._ssh_client.get_transport().send_keepalive(self.keepalive_interval)
+                except Exception as e:
+                    logging.warning(f"Failed to send keepalive: {e}. Assuming connection is lost.")
+                    self._handle_reconnection()
 
-            # Wait for the specified interval or until a stop signal is received
             self._stop_event.wait(self.keepalive_interval)
 
     def _handle_reconnection(self):
         """
-        Manages the reconnection logic with exponential backoff. This method
-        is called by the management thread when a connection is lost.
+        Manages the reconnection logic with exponential backoff.
         """
         reconnection_delay = 5
         max_reconnection_delay = 300
 
         while not self._stop_event.is_set():
             with self._lock:
-                # Mark as disconnected during the attempt
                 self._is_connected = False
-                # Close the old client if it exists
                 if self._ssh_client:
                     self._ssh_client.close()
 
@@ -175,6 +197,72 @@ class EntwareSSHInterface:
                 except Exception as e:
                     logging.error(f"Reconnection failed: {e}. Retrying in {reconnection_delay}s.")
 
-            # Wait outside the lock to allow disconnect() to acquire it
             self._stop_event.wait(reconnection_delay)
             reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
+
+
+class EntwareSSHConnectionPool:
+    """
+    A high-level manager for EntwareSSHInterface connections.
+    It provides a simple, thread-safe way to get a single, persistent,
+    and self-healing SSH connection.
+    """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super(EntwareSSHConnectionPool, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, host, username, password, **kwargs):
+        if self._initialized:
+            return
+        with self._lock:
+            if self._initialized:
+                return
+
+            logging.info("Initializing SSH connection pool...")
+            self.host = host
+            self.username = username
+            self.password = password
+            self.ssh_kwargs = kwargs
+
+            self._connection = None
+            self._connection_lock = threading.Lock()
+            self._initialized = True
+
+    def get_connection(self):
+        """
+        Retrieves the singleton SSH connection, creating it if it doesn't exist.
+        """
+        with self._connection_lock:
+            if self._connection is None or not self._connection.is_connected():
+                logging.info("Connection not available or disconnected. Establishing new connection.")
+                try:
+                    self._connection = EntwareSSHInterface(
+                        host=self.host,
+                        username=self.username,
+                        password=self.password,
+                        **self.ssh_kwargs
+                    )
+                    self._connection.connect()
+                except Exception as e:
+                    logging.error(f"Failed to create connection in pool: {e}")
+                    self._connection = None # Ensure connection is None on failure
+                    raise
+
+            return self._connection
+
+    def close_all_connections(self):
+        """
+        Closes the managed SSH connection.
+        """
+        with self._connection_lock:
+            if self._connection:
+                self._connection.disconnect()
+                self._connection = None
+            logging.info("Connection pool has been shut down.")
