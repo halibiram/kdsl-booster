@@ -8,64 +8,63 @@ to achieve a target performance metric, such as data rate.
 
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from src.spoofing import calculate_realistic_attenuation, DynamicSNRSpoofer
+from src.advanced_dsl_physics import AdvancedDSLPhysics
 
 
 class AIOptimizer:
     """
-    Uses a simple machine learning model to predict optimal DSL parameters.
-
-    This class takes experimental data, trains a multi-output regression model
-    (predicting SNR and Attenuation from a single feature, Speed), and then uses
-    that model to predict the best parameters to achieve a new target speed.
+    Uses a simple machine learning model to predict optimal DSL parameters based on
+    the advanced physics model.
     """
 
-    def __init__(self):
+    def __init__(self, dsl_profile: str = '17a'):
         """
-        Initializes the AIOptimizer with a regression model.
+        Initializes the AIOptimizer with a regression model and a physics model instance.
         """
-        # We are predicting two values (SNR, Attenuation) from one value (Speed).
-        # A simple linear regression model is a good starting point.
         self.model = LinearRegression()
+        self.physics = AdvancedDSLPhysics(profile=dsl_profile)
         self._is_trained = False
+
+    def _find_optimal_snr_for_rate(self, target_rate_mbps: float, distance_m: int) -> float:
+        """
+        Performs an iterative search to find the minimum SNR for a target rate.
+        This is a helper function to generate accurate training labels.
+        """
+        low_snr, high_snr = 0.0, 60.0
+        optimal_snr = high_snr
+
+        for _ in range(10):  # Binary search for 10 iterations for good precision
+            mid_snr = (low_snr + high_snr) / 2
+            calculated_rate = self.physics.calculate_max_bitrate(mid_snr, distance_m)
+
+            if calculated_rate >= target_rate_mbps:
+                optimal_snr = mid_snr
+                high_snr = mid_snr
+            else:
+                low_snr = mid_snr
+
+        return round(optimal_snr, 1)
 
     def _prepare_data(self, experiment_results: list) -> tuple:
         """
-        Prepares training data from raw experiment results for the ML model.
-
-        This method filters for successful experiments, extracts the measured
-        speed as the input feature (X), and reconstructs the parameters that
-        were used (target SNR and attenuation) as the output targets (y).
-
-        Args:
-            experiment_results: A list of result dictionaries from ExperimentRunner.
-
-        Returns:
-            A tuple containing the feature matrix X (measured speeds) and the
-            target matrix y (SNR, Attenuation).
+        Prepares training data from raw experiment results using the advanced physics model.
         """
         features = []
         targets = []
 
-        # We need a baseline to recalculate the target SNR from the target rate
-        # This assumes the baseline is consistent, a real implementation might need
-        # to store the baseline used for each experiment.
-        # For simplicity, we'll instantiate a spoofer with a common baseline.
-        temp_snr_spoofer = DynamicSNRSpoofer(base_rate_mbps=30, base_snr_db=25)
-
         for result in experiment_results:
-            # Only train on successful manipulations where a speed was measured
             if result["manipulation_success"] and result["measured_speed_mbps"] > 0:
                 # Feature: The resulting speed
                 features.append([result["measured_speed_mbps"]])
 
-                # Targets: The parameters that achieved this speed
+                # Targets: The parameters that would have been set to achieve the target rate
                 target_rate = result["target_rate_mbps"]
                 target_distance = result["target_distance_m"]
 
-                # Recalculate the parameters that were set
-                target_snr = temp_snr_spoofer.calculate_optimal_snr_curve(target_rate)
-                target_attenuation = calculate_realistic_attenuation(target_distance)
+                # Recalculate the parameters using the new physics model
+                target_snr = self._find_optimal_snr_for_rate(target_rate, target_distance)
+                attenuations = self.physics.model_frequency_dependent_attenuation(target_distance)
+                target_attenuation = np.mean(list(attenuations.values()))
 
                 targets.append([target_snr, target_attenuation])
 
@@ -74,18 +73,13 @@ class AIOptimizer:
     def train(self, experiment_results: list):
         """
         Trains the internal regression model on the provided experiment data.
-
-        It prepares the data and fits the model. If there is insufficient valid
-        data (less than 2 samples), training is skipped.
-
-        Args:
-            experiment_results: A list of result dictionaries from ExperimentRunner.
         """
-        print("Preparing data and training AI model...")
+        print("Preparing data and training AI model using advanced physics...")
         X, y = self._prepare_data(experiment_results)
 
         if len(X) < 2:
-            print("Not enough data to train the model. Run more experiments.")
+            print("Not enough valid data to train the model. Run more experiments.")
+            self._is_trained = False
             return
 
         self.model.fit(X, y)
@@ -95,21 +89,11 @@ class AIOptimizer:
     def predict_optimal_params(self, target_rate_mbps: float) -> dict | None:
         """
         Predicts the optimal SNR and attenuation for a given target data rate.
-
-        Uses the trained linear regression model to make a prediction.
-
-        Args:
-            target_rate_mbps: The desired data rate in Mbps.
-
-        Returns:
-            A dictionary with the predicted 'predicted_snr' and
-            'predicted_attenuation', or None if the model is not yet trained.
         """
         if not self._is_trained:
             print("Model is not trained yet. Please train the model first.")
             return None
 
-        # The model expects a 2D array for prediction
         predicted_params = self.model.predict([[target_rate_mbps]])[0]
 
         result = {

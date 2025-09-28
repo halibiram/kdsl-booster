@@ -8,129 +8,57 @@ line performance.
 """
 import numpy as np
 
-# A simplified linear model for VDSL2 attenuation.
-# Based on the observation that 300m corresponds to ~18.5 dB in the spec.
-# This yields a loss factor of roughly 0.0617 dB/meter.
-# A more complex model would account for frequency-dependent loss across different tones.
-ATTENUATION_PER_METER_DB = 18.5 / 300
-
-def calculate_realistic_attenuation(target_distance_m: int) -> float:
-    """
-    Calculates a realistic target attenuation based on a simulated line distance.
-
-    This function uses a simplified linear model where attenuation is directly
-    proportional to distance. The model is calibrated based on the project
-    specification's reference value (18.5 dB at 300m). A more advanced
-    implementation would generate a complex, per-tone attenuation profile.
-
-    Args:
-        target_distance_m: The simulated target distance from the DSLAM in meters.
-
-    Returns:
-        The calculated target attenuation in dB, rounded to one decimal place.
-    """
-    if target_distance_m <= 0:
-        # Return a minimal, non-zero attenuation for extremely short distances
-        return 0.5
-
-    calculated_attenuation = target_distance_m * ATTENUATION_PER_METER_DB
-
-    return round(calculated_attenuation, 1)
-
-
-class DynamicSNRSpoofer:
-    """
-    Calculates the required SNR to achieve a target data rate based on a baseline.
-
-    This model uses the common rule of thumb for DSL performance, which is derived
-    from the Shannon-Hartley theorem: doubling the data rate requires approximately
-    a 6 dB increase in the Signal-to-Noise Ratio. This class encapsulates that
-    logarithmic relationship.
-    """
-    def __init__(self, base_rate_mbps: float, base_snr_db: float):
-        """
-        Initializes the spoofer with a known baseline performance.
-
-        Args:
-            base_rate_mbps: The current, measured data rate in Mbps.
-            base_snr_db: The current, measured SNR in dB.
-        """
-        self.base_rate_mbps = base_rate_mbps
-        self.base_snr_db = base_snr_db
-        # According to the "6dB per double" rule, the relationship is logarithmic.
-        # Rate = k * log2(SNR_linear) => SNR_linear = 2^(Rate/k)
-        # In dB, this means Rate is proportional to SNR_dB.
-        # Rate2 / Rate1 = (SNR2_dB / SNR1_dB) is not quite right.
-        # The doubling rule is an approximation: Rate2 = Rate1 * 2^((SNR2 - SNR1)/6)
-        # So, (SNR2 - SNR1)/6 = log2(Rate2/Rate1)
-        # SNR2 = SNR1 + 6 * log2(Rate2/Rate1)
-        self.LOG2_FACTOR = 6.0
-
-    def calculate_optimal_snr_curve(self, target_rate_mbps: float) -> float:
-        """
-        Calculates the target SNR required to achieve the desired data rate.
-
-        Args:
-            target_rate_mbps: The desired data rate in Mbps.
-
-        Returns:
-            The calculated target SNR in dB.
-        """
-        if target_rate_mbps <= self.base_rate_mbps:
-            return self.base_snr_db
-
-        rate_ratio = target_rate_mbps / self.base_rate_mbps
-
-        # Calculate the required SNR boost in dB
-        snr_boost_db = self.LOG2_FACTOR * np.log2(rate_ratio)
-
-        target_snr_db = self.base_snr_db + snr_boost_db
-
-        return round(target_snr_db, 1)
-
-
 from src.entware_ssh import EntwareSSHInterface
 from src.keenetic_dsl_interface import KeeneticDSLInterface
+from src.advanced_dsl_physics import AdvancedDSLPhysics
 
 
 class KernelDSLManipulator:
     """
-    Orchestrates the end-to-end process of calculating and applying spoofed parameters.
-
-    This class acts as the main engine for the spoofing process. It uses the
-    physics-based models to determine ideal kernel parameters and the hardware-aware
-    KeeneticDSLInterface to write these values to the correct hardware registers.
+    Orchestrates the end-to-end process of calculating and applying spoofed parameters
+    using advanced, physics-based models.
     """
 
-    def __init__(
-        self,
-        ssh_interface: EntwareSSHInterface,
-        base_rate_mbps: float,
-        base_snr_db: float,
-    ):
+    def __init__(self, ssh_interface: EntwareSSHInterface, profile: str = '17a'):
         """
-        Initializes the manipulator, detects hardware, and sets up spoofing models.
+        Initializes the manipulator, detects hardware, and sets up advanced physics models.
 
         Args:
             ssh_interface: An active EntwareSSHInterface instance.
-            base_rate_mbps: The current, measured data rate in Mbps.
-            base_snr_db: The current, measured SNR in dB.
+            profile: The VDSL2 profile to use for physics calculations (e.g., '17a').
         """
         self.dsl_interface = KeeneticDSLInterface(ssh_interface)
-        self.snr_spoofer = DynamicSNRSpoofer(base_rate_mbps, base_snr_db)
+        self.physics = AdvancedDSLPhysics(profile=profile)
 
-        # Detect hardware on initialization to ensure the interface is ready
         self.hardware_detected = self.dsl_interface.detect_hardware()
         if not self.hardware_detected:
-            # This is a critical failure; the manipulator cannot function
-            # without knowing the hardware.
             raise RuntimeError("Failed to detect Keenetic hardware. Cannot proceed.")
+
+    def _find_optimal_snr_for_rate(self, target_rate_mbps: float, distance_m: int) -> float:
+        """
+        Performs an iterative search to find the minimum SNR required for the target rate.
+        This is an inverse of the Shannon-Hartley calculation.
+        """
+        low_snr, high_snr = 0.0, 60.0  # A reasonable search range for SNR in dB
+        optimal_snr = high_snr
+
+        for _ in range(10):  # 10 iterations of binary search for good precision
+            mid_snr = (low_snr + high_snr) / 2
+            calculated_rate = self.physics.calculate_max_bitrate(mid_snr, distance_m)
+
+            if calculated_rate >= target_rate_mbps:
+                optimal_snr = mid_snr  # This SNR is a potential candidate
+                high_snr = mid_snr      # Try for an even lower SNR
+            else:
+                low_snr = mid_snr      # This SNR is too low, need to aim higher
+
+        return round(optimal_snr, 1)
 
     def set_target_profile(
         self, target_rate_mbps: float, target_distance_m: int
     ) -> dict:
         """
-        Calculates and applies a new DSL profile based on target rate and distance.
+        Calculates and applies a new DSL profile using advanced physics models.
 
         Args:
             target_rate_mbps: The desired data rate in Mbps.
@@ -140,23 +68,24 @@ class KernelDSLManipulator:
             A dictionary reporting the success of each parameter write operation.
         """
         if not self.hardware_detected:
-            print("Cannot set target profile: hardware not detected.")
             return {"error": "Hardware not detected", "snr_margin_set": False, "attenuation_set": False}
 
         print(f"Setting target profile for {self.hardware_detected}: {target_rate_mbps} Mbps at {target_distance_m}m")
 
-        # 1. Calculate target parameters from models
-        target_snr = self.snr_spoofer.calculate_optimal_snr_curve(target_rate_mbps)
-        target_attenuation = calculate_realistic_attenuation(target_distance_m)
+        # 1. Calculate required parameters using the advanced physics model
+        target_snr = self._find_optimal_snr_for_rate(target_rate_mbps, target_distance_m)
+        attenuations = self.physics.model_frequency_dependent_attenuation(distance_m=target_distance_m)
+        # For now, we take the average attenuation across bands as the target value.
+        target_attenuation = np.mean(list(attenuations.values()))
 
-        print(f"Calculated Targets -> SNR: {target_snr} dB, Attenuation: {target_attenuation} dB")
+        print(f"Calculated Targets -> Required SNR: {target_snr} dB, Avg Attenuation: {target_attenuation:.2f} dB")
 
-        # 2. Convert to register format (e.g., 0.1 dB units, then hex) and write
+        # 2. Write parameters to hardware registers
         results = {}
 
-        # Convert SNR to 0.1 dB units, then to a hex string for the register
-        # Note: Some registers might not exist on all hardware (e.g., attenuation on Viva)
+        # Write SNR margin if supported
         if 'snr_margin' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
+            # The register value is often in 0.1 dB units
             snr_register_value = hex(int(target_snr * 10))
             results["snr_margin_set"] = self.dsl_interface.write_dsl_register(
                 'snr_margin', snr_register_value
@@ -164,6 +93,7 @@ class KernelDSLManipulator:
         else:
             results["snr_margin_set"] = "not_supported"
 
+        # Write attenuation if supported
         if 'attenuation' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
             attn_register_value = hex(int(target_attenuation * 10))
             results["attenuation_set"] = self.dsl_interface.write_dsl_register(
