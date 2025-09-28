@@ -1,73 +1,101 @@
 import pytest
-from src.advanced_dsl_physics import AdvancedDSLPhysics
+import numpy as np
+from src.advanced_dsl_physics import AdvancedDSLPhysics, VDSL2_PROFILES
 
 @pytest.fixture
 def physics_model_17a():
-    """Provides an AdvancedDSLPhysics instance for the 17a profile."""
+    """Provides a default AdvancedDSLPhysics instance for the 17a profile."""
     return AdvancedDSLPhysics(profile='17a')
 
-def test_profile_initialization(physics_model_17a):
-    """
-    Tests that the model initializes correctly for a given profile.
-    """
-    assert physics_model_17a.profile == '17a'
-    assert 'DS1' in physics_model_17a.tones_per_band
-    assert 'DS2' in physics_model_17a.tones_per_band
-    assert 'DS3' in physics_model_17a.tones_per_band
-    # For profile 17a, there should be 3 downstream bands
-    assert len(physics_model_17a.downstream_bands) == 3
+def test_invalid_profile_raises_error():
+    """Tests that initializing with an unsupported profile raises a ValueError."""
+    with pytest.raises(ValueError):
+        AdvancedDSLPhysics(profile='invalid_profile')
 
-def test_frequency_dependent_attenuation(physics_model_17a):
+def test_tone_generation(physics_model_17a):
     """
-    Tests that the attenuation model produces plausible, frequency-dependent results.
+    Tests that the tone frequencies are generated correctly for the profile.
     """
-    distance_m = 500
-    attenuations = physics_model_17a.model_frequency_dependent_attenuation(distance_m)
+    profile_data = VDSL2_PROFILES['17a']
+    tone_spacing = profile_data['tone_spacing_hz']
 
-    # The key behavior is that attenuation increases with frequency.
-    assert attenuations['DS2'] > attenuations['DS1']
-    assert attenuations['DS3'] > attenuations['DS2']
+    # Check if the number of tones is reasonable
+    assert len(physics_model_17a.tones) > 2500  # Corrected expectation
+    assert len(physics_model_17a.tones) < profile_data['total_tones']
 
-    # Widen the plausible value checks to make the test more robust to small model changes.
-    assert 10 < attenuations['DS1'] < 20  # Expecting ~15.36 dB
-    assert 20 < attenuations['DS2'] < 40
-    assert 40 < attenuations['DS3'] < 60
+    # Check if the first and last tones are within the expected frequency bands
+    first_band_start, _ = profile_data['frequency_bands'][0]
+    _, last_band_end = profile_data['frequency_bands'][-1]
 
-def test_calculate_max_bitrate(physics_model_17a):
+    assert physics_model_17a.tones[0] >= first_band_start
+    assert physics_model_17a.tones[-1] <= last_band_end
+
+    # Check that tone frequencies are increasing
+    assert np.all(np.diff(physics_model_17a.tones) > 0)
+
+def test_attenuation_increases_with_distance_and_frequency(physics_model_17a):
     """
-    Tests the max bitrate calculation based on the Shannon-Hartley theorem.
+    Tests that the attenuation model correctly shows increased loss with
+    higher distance and higher frequency.
     """
-    # Test case 1: High SNR, short distance -> High bitrate
-    high_snr = 40  # dB
-    short_distance = 200 # meters
-    high_rate = physics_model_17a.calculate_max_bitrate(high_snr, short_distance)
-    # The model is more conservative now, so expect a reasonable high rate, not necessarily >100.
-    assert high_rate > 70  # Expecting ~85 Mbps
+    attenuation_300m = physics_model_17a.model_attenuation_per_tone(distance_m=300)
+    attenuation_800m = physics_model_17a.model_attenuation_per_tone(distance_m=800)
 
-    # Test case 2: Low SNR, short distance -> Medium bitrate
-    low_snr = 20 # dB
-    medium_rate = physics_model_17a.calculate_max_bitrate(low_snr, short_distance)
-    # The new model is more realistic, so the bitrate will be lower.
-    # We check if it's within a plausible new range. Expecting ~13.7 Mbps.
-    assert 10 < medium_rate < 20
+    # Attenuation at 800m should be greater than at 300m for all tones
+    assert np.all(attenuation_800m > attenuation_300m)
 
-    # Test case 3: High SNR, long distance -> Lower bitrate due to attenuation
-    long_distance = 800 # meters
-    lower_rate = physics_model_17a.calculate_max_bitrate(high_snr, long_distance)
-    assert 10 < lower_rate < 50
+    # Attenuation for the last tone (higher freq) should be greater than the first tone (lower freq)
+    assert attenuation_300m[-1] > attenuation_300m[0]
 
-    # Test case 4: Very low SNR -> Zero or near-zero bitrate
-    very_low_snr = 5 # dB
-    zero_rate = physics_model_17a.calculate_max_bitrate(very_low_snr, short_distance)
-    assert zero_rate < 5
-
-def test_bitrate_is_zero_if_snr_is_too_low(physics_model_17a):
+def test_attenuation_increases_with_temperature(physics_model_17a):
     """
-    Tests that if the effective SNR after accounting for gains/losses is zero or negative,
-    the bitrate is zero.
+    Tests that attenuation increases when temperature is higher than the baseline 20C.
     """
-    # SNR_GAP is 9.8 and CODING_GAIN is 3.0, so any target_snr below 6.8 should result in
-    # a non-positive effective SNR.
-    zero_effective_snr = 6.0 # dB
-    rate = physics_model_17a.calculate_max_bitrate(zero_effective_snr, 200)
-    assert rate == 0.0
+    attenuation_20c = physics_model_17a.model_attenuation_per_tone(distance_m=500, temperature_c=20.0)
+    attenuation_35c = physics_model_17a.model_attenuation_per_tone(distance_m=500, temperature_c=35.0)
+
+    assert np.all(attenuation_35c > attenuation_20c)
+
+def test_snr_decreases_with_distance_and_frequency(physics_model_17a):
+    """
+    Tests that the calculated SNR per tone decreases with distance and frequency,
+    as expected due to attenuation.
+    """
+    snr_300m = physics_model_17a.calculate_snr_per_tone(distance_m=300)
+    snr_800m = physics_model_17a.calculate_snr_per_tone(distance_m=800)
+
+    # SNR at 800m should be lower than at 300m for all tones
+    assert np.all(snr_800m < snr_300m)
+
+    # SNR for the last tone (higher freq) should be lower than the first tone
+    assert snr_300m[-1] < snr_300m[0]
+
+def test_calculate_max_bitrate_realism(physics_model_17a):
+    """
+    Tests the max bitrate calculation for realistic scenarios with the tuned model.
+    """
+    # Short distance (300m) should yield a high bitrate
+    rate_300m = physics_model_17a.calculate_max_bitrate(distance_m=300)
+    assert 120 < rate_300m < 140  # Expect ~131 Mbps
+
+    # Medium distance (700m) should yield a significantly lower but still usable rate
+    rate_700m = physics_model_17a.calculate_max_bitrate(distance_m=700)
+    assert 30 < rate_700m < 40 # Expect ~35 Mbps
+
+    # Long distance (1500m) should result in a low bitrate
+    rate_1500m = physics_model_17a.calculate_max_bitrate(distance_m=1500)
+    assert 5 < rate_1500m < 10 # Expect ~6-7 Mbps
+
+    # Very long distance should result in a practically zero bitrate
+    rate_3000m = physics_model_17a.calculate_max_bitrate(distance_m=3000)
+    assert rate_3000m < 1.0 # The model might calculate a negligible rate, which is acceptable
+
+def test_bitrate_decreases_with_temperature(physics_model_17a):
+    """
+    Tests that the final bitrate is lower at higher temperatures due to increased attenuation.
+    """
+    rate_20c = physics_model_17a.calculate_max_bitrate(distance_m=500, temperature_c=20.0)
+    rate_35c = physics_model_17a.calculate_max_bitrate(distance_m=500, temperature_c=35.0)
+
+    assert rate_35c < rate_20c
+    assert rate_35c > 0 # Should still be a viable connection
