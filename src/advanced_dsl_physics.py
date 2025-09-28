@@ -4,115 +4,133 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Constants based on VDSL2 specifications (ITU-T G.993.2) and general physics.
-# These would be refined with real-world data.
-VDSL2_TONE_SPACING_HZ = 4312.5  # Standard tone spacing for VDSL2
-FLAT_NOISE_FLOOR_DBM_HZ = -140.0  # A common assumption for background noise in dBm/Hz
-CODING_GAIN_DB = 3.0  # Assumed coding gain from FEC/trellis
-SNR_GAP_DB = 9.8  # Theoretical gap to Shannon capacity limit in dB
+# --- VDSL2 Profile and Physics Constants ---
+# Based on ITU-T G.993.2 specifications and common physics models.
+
+VDSL2_PROFILES = {
+    '17a': {
+        'frequency_bands': [(138e3, 3750e3), (5200e3, 8500e3), (12000e3, 17400e3)],
+        'tone_spacing_hz': 4312.5,
+        'total_tones': 4096,
+        'psd_mask_dbm_hz': -40.0,  # Simplified flat PSD for this example
+    },
+    '35b': {
+        'frequency_bands': [(138e3, 35328e3)],
+        'tone_spacing_hz': 4312.5,
+        'total_tones': 8192,
+        'psd_mask_dbm_hz': -50.0, # Simplified flat PSD
+    }
+}
+
+# Physical constants
+FLAT_NOISE_FLOOR_DBM_HZ = -140.0  # Background thermal noise
+SNR_GAP_DB = 12.8  # Represents implementation losses + target BER margin (more realistic than 9.8)
+MAX_BITS_PER_TONE = 15  # VDSL2 standard cap
+TEMP_ATTENUATION_COEFFICIENT_DB_PER_C = 0.002 # Attenuation increase in dB per degree Celsius per meter
 
 class AdvancedDSLPhysics:
     """
-    Provides more sophisticated, physics-based models for DSL parameter calculation,
-    aligning with ITU-T G.993.2 standards for VDSL2.
+    Provides a more accurate physics-based model for VDSL2 parameter calculation,
+    incorporating per-tone calculations and environmental factors.
     """
-
     def __init__(self, profile='17a'):
+        if profile not in VDSL2_PROFILES:
+            raise ValueError(f"Profile '{profile}' not supported. Available: {list(VDSL2_PROFILES.keys())}")
+
+        self.profile_data = VDSL2_PROFILES[profile]
+        self.tone_spacing = self.profile_data['tone_spacing_hz']
+        self.tones = self._generate_tones()
+        logging.info(f"Initialized physics model for VDSL2 profile {profile} with {len(self.tones)} active tones.")
+
+    def _generate_tones(self) -> np.ndarray:
+        """Generates an array of frequencies for each active tone in the profile."""
+        active_tones = []
+        for start_freq, end_freq in self.profile_data['frequency_bands']:
+            start_tone_index = int(start_freq / self.tone_spacing)
+            end_tone_index = int(end_freq / self.tone_spacing)
+            for i in range(start_tone_index, end_tone_index + 1):
+                active_tones.append(i * self.tone_spacing)
+        return np.array(active_tones)
+
+    def model_attenuation_per_tone(self, distance_m: int, temperature_c: float = 20.0) -> np.ndarray:
         """
-        Initializes the physics model for a specific VDSL2 profile.
-
-        Args:
-            profile (str): The VDSL2 profile to model (e.g., '8b', '17a', '35b').
-        """
-        self.profile = profile
-        self.downstream_bands = self._get_profile_bands(profile)
-        self.tones_per_band = self._calculate_tones_per_band()
-        logging.info(f"Initialized advanced physics model for VDSL2 profile {profile}")
-        logging.info(f"Downstream bands (Hz): {self.downstream_bands}")
-
-    def _get_profile_bands(self, profile):
-        """Returns the downstream frequency bands for a given VDSL2 profile."""
-        bands = {
-            '17a': [(138000, 3750000), (5200000, 8500000), (12000000, 17400000)],
-            '35b': [(138000, 35000000)] # Simplified for this example
-        }
-        return bands.get(profile, bands['17a'])
-
-    def _calculate_tones_per_band(self):
-        """Calculates the number of tones within each frequency band."""
-        tones = {}
-        for i, (start_freq, end_freq) in enumerate(self.downstream_bands):
-            num_tones = int((end_freq - start_freq) / VDSL2_TONE_SPACING_HZ)
-            tones[f'DS{i+1}'] = num_tones
-        return tones
-
-    def model_frequency_dependent_attenuation(self, distance_m: int) -> dict:
-        """
-        Models attenuation as a function of frequency and distance.
-        This uses a simplified model (alpha * sqrt(f) + beta * f).
+        Models attenuation for each tone based on frequency, distance, and temperature.
+        Uses the standard K-L model for twisted pair cables: Att(f) = k * sqrt(f).
 
         Args:
             distance_m: The line distance in meters.
+            temperature_c: The ambient temperature in Celsius.
 
         Returns:
-            A dictionary with average attenuation per band.
+            A numpy array of attenuation values in dB for each active tone.
         """
-        # More realistic coefficients for 0.5mm (24 AWG) copper cable.
-        # These values produce more plausible attenuation figures (e.g., ~20-30 dB/km at 1 MHz).
-        alpha = 2.2e-2  # Primary factor for frequency-dependent loss
-        beta = 2.5e-8   # Secondary factor, more impactful at higher frequencies
+        # Cable loss constant (k) for typical 0.5mm (24 AWG) copper wire.
+        # This value is tuned to produce realistic attenuation profiles (e.g. ~40-60dB at 1km for high freqs).
+        k_cable_loss = 6.0e-2
 
-        attenuations = {}
-        for band_name, (start_freq, end_freq) in zip(self.tones_per_band.keys(), self.downstream_bands):
-            # Calculate attenuation at the center frequency of the band
-            center_freq = (start_freq + end_freq) / 2
-            attenuation_db_per_km = (alpha * np.sqrt(center_freq)) + (beta * center_freq)
-            total_attenuation = (attenuation_db_per_km / 1000) * distance_m
-            attenuations[band_name] = round(total_attenuation, 2)
+        attenuation_db_per_km = k_cable_loss * np.sqrt(self.tones)
+        base_attenuation = (attenuation_db_per_km / 1000) * distance_m
 
-        logging.info(f"Modeled attenuations for {distance_m}m: {attenuations}")
-        return attenuations
+        # Add temperature effect
+        temp_factor = 1 + (TEMP_ATTENUATION_COEFFICIENT_DB_PER_C * (temperature_c - 20))
 
-    def calculate_max_bitrate(self, target_snr_db: float, distance_m: int) -> float:
+        return base_attenuation * temp_factor
+
+    def calculate_snr_per_tone(self, distance_m: int, temperature_c: float = 20.0) -> np.ndarray:
         """
-        Calculates the maximum achievable data rate using the Shannon-Hartley theorem,
-        summed across all tones in the profile.
+        Calculates the Signal-to-Noise Ratio (SNR) for each individual tone.
 
         Args:
-            target_snr_db: The target average Signal-to-Noise Ratio in dB.
-            distance_m: The line distance in meters, used for attenuation modeling.
+            distance_m: Line distance in meters.
+            temperature_c: Ambient temperature in Celsius.
+
+        Returns:
+            A numpy array of SNR values in dB for each active tone.
+        """
+        # 1. Get transmit power per tone
+        tx_power_dbm_per_tone = self.profile_data['psd_mask_dbm_hz'] + 10 * np.log10(self.tone_spacing)
+
+        # 2. Calculate attenuation for each tone
+        attenuation_db = self.model_attenuation_per_tone(distance_m, temperature_c)
+
+        # 3. Calculate received power for each tone
+        rx_power_dbm_per_tone = tx_power_dbm_per_tone - attenuation_db
+
+        # 4. Calculate noise power in each tone's bandwidth
+        noise_power_dbm_per_tone = FLAT_NOISE_FLOOR_DBM_HZ + 10 * np.log10(self.tone_spacing)
+
+        # 5. Calculate SNR for each tone
+        snr_db = rx_power_dbm_per_tone - noise_power_dbm_per_tone
+        return snr_db
+
+    def calculate_max_bitrate(self, distance_m: int, temperature_c: float = 20.0) -> float:
+        """
+        Calculates the maximum achievable data rate by summing the capacity of each tone.
+        This uses a bit-loading algorithm based on the Shannon-Hartley theorem.
+
+        Args:
+            distance_m: The line distance in meters.
+            temperature_c: The ambient temperature in Celsius.
 
         Returns:
             The maximum theoretical data rate in Mbps.
         """
-        total_bitrate_bps = 0
-        attenuations = self.model_frequency_dependent_attenuation(distance_m)
+        snr_per_tone_db = self.calculate_snr_per_tone(distance_m, temperature_c)
 
-        # Effective SNR after accounting for coding gain and Shannon gap
-        effective_snr_db = target_snr_db + CODING_GAIN_DB - SNR_GAP_DB
+        # Convert SNR from dB to a linear ratio and adjust for the SNR gap
+        snr_gap_linear = 10 ** (SNR_GAP_DB / 10)
+        effective_snr_linear = (10 ** (snr_per_tone_db / 10)) / snr_gap_linear
 
-        if effective_snr_db <= 0:
-            return 0.0
+        # Calculate bits per tone (log base 2)
+        # We use a mask to avoid log2(negative) for tones with SNR < 0
+        bits_per_tone = np.zeros_like(effective_snr_linear)
+        positive_snr_mask = effective_snr_linear > 0
+        bits_per_tone[positive_snr_mask] = np.log2(1 + effective_snr_linear[positive_snr_mask])
 
-        for band_name, num_tones in self.tones_per_band.items():
-            # Apply the band-specific attenuation to the SNR
-            band_attenuation = attenuations.get(band_name, 0)
-            snr_after_attenuation = effective_snr_db - band_attenuation
+        # Apply the maximum bits per tone cap
+        bits_per_tone = np.clip(bits_per_tone, 0, MAX_BITS_PER_TONE)
 
-            if snr_after_attenuation <= 0:
-                continue
-
-            # Convert dB to a linear power ratio
-            snr_linear = 10 ** (snr_after_attenuation / 10)
-
-            # Shannon-Hartley for a single tone
-            bits_per_tone = np.log2(1 + snr_linear)
-
-            # Max bits per tone is capped in DSL (e.g., 15 bits)
-            bits_per_tone = min(bits_per_tone, 15.0)
-
-            # Bitrate for this band
-            band_bitrate = num_tones * bits_per_tone * VDSL2_TONE_SPACING_HZ
-            total_bitrate_bps += band_bitrate
+        # Total bitrate is the sum of bits per tone times the tone spacing (symbol rate)
+        total_bitrate_bps = np.sum(bits_per_tone) * self.tone_spacing
 
         return round(total_bitrate_bps / 1_000_000, 2) # Convert to Mbps
