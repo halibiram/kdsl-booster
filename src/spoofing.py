@@ -90,7 +90,7 @@ class DynamicSNRSpoofer:
 
 
 from src.entware_ssh import EntwareSSHInterface
-from src.kernel_dsl_access import write_kernel_parameter
+from src.keenetic_dsl_interface import KeeneticDSLInterface
 
 
 class KernelDSLManipulator:
@@ -98,9 +98,8 @@ class KernelDSLManipulator:
     Orchestrates the end-to-end process of calculating and applying spoofed parameters.
 
     This class acts as the main engine for the spoofing process. It uses the
-    physics-based models (`DynamicSNRSpoofer`, `calculate_realistic_attenuation`)
-    to determine the ideal kernel parameters for a given target, and then uses
-    the `kernel_dsl_access` functions to write these values to the remote system.
+    physics-based models to determine ideal kernel parameters and the hardware-aware
+    KeeneticDSLInterface to write these values to the correct hardware registers.
     """
 
     def __init__(
@@ -110,22 +109,22 @@ class KernelDSLManipulator:
         base_snr_db: float,
     ):
         """
-        Initializes the manipulator with an active SSH interface and baseline metrics.
+        Initializes the manipulator, detects hardware, and sets up spoofing models.
 
         Args:
             ssh_interface: An active EntwareSSHInterface instance.
             base_rate_mbps: The current, measured data rate in Mbps.
             base_snr_db: The current, measured SNR in dB.
         """
-        self.ssh_interface = ssh_interface
+        self.dsl_interface = KeeneticDSLInterface(ssh_interface)
         self.snr_spoofer = DynamicSNRSpoofer(base_rate_mbps, base_snr_db)
 
-        # Hypothetical paths for kernel parameters. In a real scenario, these
-        # would be discovered or configured based on the target device.
-        self.PARAM_PATHS = {
-            "snr_margin": "/sys/module/dsl/parameters/snr_margin_override",
-            "attenuation": "/sys/module/dsl/parameters/attenuation_override",
-        }
+        # Detect hardware on initialization to ensure the interface is ready
+        self.hardware_detected = self.dsl_interface.detect_hardware()
+        if not self.hardware_detected:
+            # This is a critical failure; the manipulator cannot function
+            # without knowing the hardware.
+            raise RuntimeError("Failed to detect Keenetic hardware. Cannot proceed.")
 
     def set_target_profile(
         self, target_rate_mbps: float, target_distance_m: int
@@ -140,7 +139,11 @@ class KernelDSLManipulator:
         Returns:
             A dictionary reporting the success of each parameter write operation.
         """
-        print(f"Setting target profile: {target_rate_mbps} Mbps at {target_distance_m}m")
+        if not self.hardware_detected:
+            print("Cannot set target profile: hardware not detected.")
+            return {"error": "Hardware not detected", "snr_margin_set": False, "attenuation_set": False}
+
+        print(f"Setting target profile for {self.hardware_detected}: {target_rate_mbps} Mbps at {target_distance_m}m")
 
         # 1. Calculate target parameters from models
         target_snr = self.snr_spoofer.calculate_optimal_snr_curve(target_rate_mbps)
@@ -148,20 +151,26 @@ class KernelDSLManipulator:
 
         print(f"Calculated Targets -> SNR: {target_snr} dB, Attenuation: {target_attenuation} dB")
 
-        # 2. Write parameters to the kernel via SSH
+        # 2. Convert to register format (e.g., 0.1 dB units, then hex) and write
         results = {}
 
-        # Write SNR margin
-        snr_path = self.PARAM_PATHS["snr_margin"]
-        results["snr_margin_set"] = write_kernel_parameter(
-            self.ssh_interface, snr_path, str(target_snr)
-        )
+        # Convert SNR to 0.1 dB units, then to a hex string for the register
+        # Note: Some registers might not exist on all hardware (e.g., attenuation on Viva)
+        if 'snr_margin' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
+            snr_register_value = hex(int(target_snr * 10))
+            results["snr_margin_set"] = self.dsl_interface.write_dsl_register(
+                'snr_margin', snr_register_value
+            )
+        else:
+            results["snr_margin_set"] = "not_supported"
 
-        # Write attenuation
-        attenuation_path = self.PARAM_PATHS["attenuation"]
-        results["attenuation_set"] = write_kernel_parameter(
-            self.ssh_interface, attenuation_path, str(target_attenuation)
-        )
+        if 'attenuation' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
+            attn_register_value = hex(int(target_attenuation * 10))
+            results["attenuation_set"] = self.dsl_interface.write_dsl_register(
+                'attenuation', attn_register_value
+            )
+        else:
+            results["attenuation_set"] = "not_supported"
 
         print(f"Manipulation results: {results}")
         return results
