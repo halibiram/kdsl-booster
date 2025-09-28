@@ -13,10 +13,12 @@ from src.entware_ssh import EntwareSSHInterface
 
 def discover_dsl_interfaces(ssh_interface: EntwareSSHInterface) -> dict:
     """
-    Discovers DSL-related network interfaces on the remote system.
+    Discovers DSL-related network interfaces on a remote system via SSH.
 
-    It checks the /sys/class/net directory for interfaces that commonly
-    relate to DSL connections, such as 'dsl', 'ptm', and 'atm'.
+    This function lists all network interfaces in `/sys/class/net` and filters
+    for common DSL-related keywords ('dsl', 'ptm', 'atm'). If none are found,
+    it returns a dictionary of hypothetical default paths for robust operation
+    in various environments.
 
     Args:
         ssh_interface: An active EntwareSSHInterface instance.
@@ -59,14 +61,16 @@ def discover_dsl_interfaces(ssh_interface: EntwareSSHInterface) -> dict:
 
 def read_kernel_parameter(ssh_interface: EntwareSSHInterface, param_path: str) -> str | None:
     """
-    Reads the value of a kernel parameter from a file in /sys or /proc.
+    Reads the value of a kernel parameter from a specific file on the remote device.
+
+    Executes `cat` on the given path to retrieve the parameter's current value.
 
     Args:
         ssh_interface: An active EntwareSSHInterface instance.
-        param_path: The full path to the kernel parameter file.
+        param_path: The full, absolute path to the kernel parameter file.
 
     Returns:
-        The value of the parameter as a string, or None if reading fails.
+        The value of the parameter as a cleaned string, or None if reading fails.
     """
     print(f"Reading kernel parameter from: {param_path}")
     stdout, stderr = ssh_interface.execute_command(f"cat {param_path}")
@@ -80,17 +84,19 @@ def read_kernel_parameter(ssh_interface: EntwareSSHInterface, param_path: str) -
 
 def write_kernel_parameter(ssh_interface: EntwareSSHInterface, param_path: str, value: str) -> bool:
     """
-    Writes a value to a kernel parameter file in /sys or /proc.
+    Writes a value to a kernel parameter file on the remote device.
 
-    Note: This requires root privileges on the target device.
+    This function executes `echo 'value' > /path/to/param` to set the parameter.
+    It includes basic sanitization to prevent command injection but assumes
+    the user has the necessary (root) privileges on the target device.
 
     Args:
         ssh_interface: An active EntwareSSHInterface instance.
-        param_path: The full path to the kernel parameter file.
+        param_path: The full, absolute path to the kernel parameter file.
         value: The value to write to the parameter.
 
     Returns:
-        True if the write operation was successful, False otherwise.
+        True if the write operation appears successful (no stderr), False otherwise.
     """
     print(f"Writing '{value}' to kernel parameter: {param_path}")
 

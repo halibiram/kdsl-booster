@@ -16,10 +16,12 @@ ATTENUATION_PER_METER_DB = 18.5 / 300
 
 def calculate_realistic_attenuation(target_distance_m: int) -> float:
     """
-    Calculates a realistic target attenuation value based on a simulated distance.
+    Calculates a realistic target attenuation based on a simulated line distance.
 
-    This uses a simplified linear model. A real-world implementation would
-    generate a complex attenuation profile across all VDSL2 tones.
+    This function uses a simplified linear model where attenuation is directly
+    proportional to distance. The model is calibrated based on the project
+    specification's reference value (18.5 dB at 300m). A more advanced
+    implementation would generate a complex, per-tone attenuation profile.
 
     Args:
         target_distance_m: The simulated target distance from the DSLAM in meters.
@@ -38,11 +40,12 @@ def calculate_realistic_attenuation(target_distance_m: int) -> float:
 
 class DynamicSNRSpoofer:
     """
-    Calculates the required Signal-to-Noise Ratio (SNR) to achieve a target data rate.
+    Calculates the required SNR to achieve a target data rate based on a baseline.
 
-    This model is based on the Shannon-Hartley theorem, which implies a logarithmic
-    relationship between data rate and SNR. A common rule of thumb is that
-    doubling the data rate requires a 6 dB increase in SNR.
+    This model uses the common rule of thumb for DSL performance, which is derived
+    from the Shannon-Hartley theorem: doubling the data rate requires approximately
+    a 6 dB increase in the Signal-to-Noise Ratio. This class encapsulates that
+    logarithmic relationship.
     """
     def __init__(self, base_rate_mbps: float, base_snr_db: float):
         """
@@ -92,11 +95,12 @@ from src.kernel_dsl_access import write_kernel_parameter
 
 class KernelDSLManipulator:
     """
-    Orchestrates the manipulation of DSL kernel parameters.
+    Orchestrates the end-to-end process of calculating and applying spoofed parameters.
 
-    This class uses the physics-based models to calculate target values and
-    then uses the kernel_dsl_access functions to write these values to the
-    live system, effectively spoofing the line parameters.
+    This class acts as the main engine for the spoofing process. It uses the
+    physics-based models (`DynamicSNRSpoofer`, `calculate_realistic_attenuation`)
+    to determine the ideal kernel parameters for a given target, and then uses
+    the `kernel_dsl_access` functions to write these values to the remote system.
     """
 
     def __init__(
