@@ -1,0 +1,15 @@
+if PACKAGE_kmod-mt7992
+
+choice
+	prompt "SKU type"
+	config MTK_WIFI7_SKU_BE7200
+		bool "BE7200"
+	config MTK_WIFI7_SKU_BE6500
+		bool "BE6500"
+	config MTK_WIFI7_SKU_BE5040
+		bool "BE5040"
+	config MTK_WIFI7_SKU_BE3600SDB
+		bool "BE3600SDB"
+endchoice
+
+endif

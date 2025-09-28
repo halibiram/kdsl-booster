@@ -1,0 +1,47 @@
+diff -Nuar busybox-1.24.2/init/halt.c busybox-1.24.2-patched/init/halt.c
+--- busybox-1.24.2/init/halt.c	2023-06-06 21:40:25.045036199 +0300
++++ busybox-1.24.2-patched/init/halt.c	2023-06-06 21:41:47.161500310 +0300
+@@ -1,6 +1,6 @@
+ /* vi: set sw=4 ts=4: */
+ /*
+- * Poweroff reboot and halt, oh my.
++ * Poweroff and halt, oh my.
+  *
+  * Copyright 2006 by Rob Landley <rob@landley.net>
+  *
+@@ -9,18 +9,17 @@
+ 
+ //applet:IF_HALT(APPLET(halt, BB_DIR_SBIN, BB_SUID_DROP))
+ //applet:IF_HALT(APPLET_ODDNAME(poweroff, halt, BB_DIR_SBIN, BB_SUID_DROP, poweroff))
+-//applet:IF_HALT(APPLET_ODDNAME(reboot, halt, BB_DIR_SBIN, BB_SUID_DROP, reboot))
+ 
+ //kbuild:lib-$(CONFIG_HALT) += halt.o
+ 
+ //config:config HALT
+-//config:	bool "poweroff, halt, and reboot"
++//config:	bool "poweroff and halt"
+ //config:	default y
+ //config:	help
+-//config:	  Stop all processes and either halt, reboot, or power off the system.
++//config:	  Stop all processes and either halt or power off the system.
+ //config:
+ //config:config FEATURE_CALL_TELINIT
+-//config:	bool "Call telinit on shutdown and reboot"
++//config:	bool "Call telinit on shutdown"
+ //config:	default y
+ //config:	depends on HALT && !INIT
+ //config:	help
+@@ -58,13 +57,6 @@
+ //usage:     "\n	-n	Do not sync"
+ //usage:     "\n	-f	Force (don't go through init)"
+ //usage:
+-//usage:#define reboot_trivial_usage
+-//usage:       "[-d DELAY] [-n] [-f]"
+-//usage:#define reboot_full_usage "\n\n"
+-//usage:       "Reboot the system\n"
+-//usage:     "\n	-d SEC	Delay interval"
+-//usage:     "\n	-n	Do not sync"
+-//usage:     "\n	-f	Force (don't go through init)"
+ 
+ #include "libbb.h"
+ #include "reboot.h"
