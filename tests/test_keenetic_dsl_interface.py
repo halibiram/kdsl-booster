@@ -1,145 +1,138 @@
 import pytest
-from unittest.mock import MagicMock
-from src.keenetic_dsl_interface import KeeneticDSLInterface, KEENETIC_HARDWARE_MATRIX
+from unittest.mock import MagicMock, call
+from src.keenetic_dsl_interface import (
+    KeeneticDSLInterface,
+    BroadcomDslHal,
+    LantiqDslHal,
+    CHIPSET_FAMILY_MAP
+)
 
+# Mock SSH Interface Fixture
 @pytest.fixture
-def mock_ssh_interface():
-    """A fixture to create a mock EntwareSSHInterface."""
+def mock_ssh():
+    """Provides a mock of the EntwareSSHInterface."""
     return MagicMock()
 
-@pytest.fixture
-def dsl_interface(mock_ssh_interface):
-    """A fixture to create a KeeneticDSLInterface with a mocked SSH interface."""
-    return KeeneticDSLInterface(mock_ssh_interface)
-
-def test_detect_hardware_success(dsl_interface, mock_ssh_interface):
+# KeeneticDSLInterface (Factory) Tests
+@pytest.mark.parametrize("model_key, model_string, expected_hal_class", [
+    ("KN-1010", "Keenetic Giga (KN-1010)", BroadcomDslHal),
+    ("KN-2410", "Keenetic Viva (KN-2410)", LantiqDslHal),
+])
+def test_factory_detects_correct_hal(mock_ssh, model_key, model_string, expected_hal_class):
     """
-    Tests that detect_hardware correctly identifies a known model and loads its specs.
+    Tests that the factory instantiates the correct HAL based on the detected model.
     """
-    # Simulate the output of `cat /proc/device-tree/model` for a known device
-    model_string = "Keenetic Giga (KN-1010)"
-    mock_ssh_interface.execute_command.return_value = (model_string, "")
+    # Simulate model detection and successful driver discovery
+    mock_ssh.execute_command.side_effect = [
+        (model_string, ""),  # First call for model detection
+        ("/path/to/driver", "")  # Second call for driver discovery
+    ]
 
-    detected_model = dsl_interface.detect_hardware()
+    factory = KeeneticDSLInterface(mock_ssh)
+    hal_instance = factory.get_hal()
 
-    # Verify the command was executed
-    mock_ssh_interface.execute_command.assert_called_once_with("cat /proc/device-tree/model")
+    assert isinstance(hal_instance, expected_hal_class)
+    assert factory._hal_class == expected_hal_class
 
-    # Verify the correct model and specs were loaded
-    assert detected_model == "KN-1010"
-    assert dsl_interface.hardware_model == "KN-1010"
-    assert dsl_interface.hardware_specs == KEENETIC_HARDWARE_MATRIX["KN-1010"]
+    # Check that model detection was called
+    mock_ssh.execute_command.assert_any_call("cat /proc/device-tree/model")
 
-def test_detect_hardware_unknown_model(dsl_interface, mock_ssh_interface):
+def test_factory_returns_none_for_unknown_model(mock_ssh):
     """
-    Tests that detect_hardware returns None for an unknown model string.
+    Tests that the factory returns None if the router model is not in the map.
     """
-    model_string = "Some Unknown Router"
-    mock_ssh_interface.execute_command.return_value = (model_string, "")
+    mock_ssh.execute_command.return_value = ("Unknown Model XYZ", "")
 
-    detected_model = dsl_interface.detect_hardware()
+    factory = KeeneticDSLInterface(mock_ssh)
+    hal_instance = factory.get_hal()
 
-    assert detected_model is None
-    assert dsl_interface.hardware_model is None
-    assert dsl_interface.hardware_specs is None
+    assert hal_instance is None
 
-def test_detect_hardware_ssh_error(dsl_interface, mock_ssh_interface):
+def test_factory_returns_none_if_driver_discovery_fails(mock_ssh):
     """
-    Tests that detect_hardware returns None when the SSH command fails.
+    Tests that the factory returns None if the HAL fails to find its driver.
     """
-    mock_ssh_interface.execute_command.return_value = (None, "Permission denied")
+    # Simulate model detection, but make all driver discovery attempts fail
+    mock_ssh.execute_command.side_effect = [
+        ("Keenetic Giga (KN-1010)", ""),  # 1. Model detection
+        ("", "not found"),                # 2. command -v xdslctl
+        ("", "not found"),                # 3. command -v bcm_xdslctl
+        ("", "not found"),                # 4. command -v adslctl
+    ]
 
-    detected_model = dsl_interface.detect_hardware()
+    factory = KeeneticDSLInterface(mock_ssh)
+    hal_instance = factory.get_hal()
 
-    assert detected_model is None
+    assert hal_instance is None
 
-def test_get_dsl_register_address(dsl_interface):
+# BroadcomDslHal Tests
+def test_broadcom_hal_discover_driver_success(mock_ssh):
+    """Tests successful discovery of a Broadcom control utility."""
+    mock_ssh.execute_command.side_effect = [
+        ("", ""),  # 'command -v xdslctl' fails
+        ("/usr/sbin/bcm_xdslctl", ""),  # 'command -v bcm_xdslctl' succeeds
+    ]
+
+    hal = BroadcomDslHal(mock_ssh)
+    assert hal.discover_driver() is True
+    assert hal.driver_path == "/usr/sbin/bcm_xdslctl"
+
+    expected_calls = [
+        call("command -v xdslctl", timeout=5),
+        call("command -v bcm_xdslctl", timeout=5)
+    ]
+    mock_ssh.execute_command.assert_has_calls(expected_calls)
+
+def test_broadcom_hal_get_snr_margin(mock_ssh):
+    """Tests parsing SNR margin from Broadcom utility output."""
+    hal = BroadcomDslHal(mock_ssh)
+    hal.driver_path = "/usr/sbin/xdslctl" # Assume driver is found
+
+    mock_output = """
+    Status: Showtime
+    SNR Margin (dB): 12.3 10.1
     """
-    Tests the calculation of a DSL register's absolute memory address.
-    """
-    # First, simulate that hardware has been detected
-    dsl_interface.hardware_model = "KN-1010"
-    dsl_interface.hardware_specs = KEENETIC_HARDWARE_MATRIX["KN-1010"]
+    mock_ssh.execute_command.return_value = (mock_output, "")
 
-    # Calculate a known register address
-    snr_address = dsl_interface.get_dsl_register_address('snr_margin')
+    snr = hal.get_snr_margin()
 
-    # 0xBC000000 (base) + 0x1C08 (offset) = 0xBC001C08
-    expected_address = 0xBC000000 + 0x1C08
-    assert snr_address == expected_address
+    mock_ssh.execute_command.assert_called_with("/usr/sbin/xdslctl info --show")
+    assert snr == 12.3
 
-def test_get_dsl_register_address_for_unknown_register(dsl_interface):
-    """
-    Tests that get_dsl_register_address returns None for an undefined register.
-    """
-    dsl_interface.hardware_model = "KN-1010"
-    dsl_interface.hardware_specs = KEENETIC_HARDWARE_MATRIX["KN-1010"]
+# LantiqDslHal Tests
+def test_lantiq_hal_discover_driver_success(mock_ssh):
+    """Tests successful discovery of a Lantiq driver path."""
+    mock_ssh.execute_command.return_value = ("/sys/class/dsl/dsl0", "")
 
-    address = dsl_interface.get_dsl_register_address('non_existent_register')
+    hal = LantiqDslHal(mock_ssh)
 
-    assert address is None
+    assert hal.discover_driver() is True
+    assert hal.driver_path == "/sys/class/dsl/dsl0"
 
-def test_get_dsl_register_address_before_detection(dsl_interface):
-    """
-    Tests that get_dsl_register_address returns None if hardware hasn't been detected.
-    """
-    address = dsl_interface.get_dsl_register_address('snr_margin')
-    assert address is None
+    expected_command = "find /sys/class/dsl/dsl* -name 'adsl_version' -print -quit | sed 's|/adsl_version$||'"
+    mock_ssh.execute_command.assert_called_once_with(expected_command, timeout=5)
 
-def test_read_dsl_register_success(dsl_interface, mock_ssh_interface):
-    """
-    Tests a successful read from a DSL register.
-    """
-    # Simulate hardware detection
-    dsl_interface.hardware_model = "KN-2410"
-    dsl_interface.hardware_specs = KEENETIC_HARDWARE_MATRIX["KN-2410"]
+def test_lantiq_hal_get_snr_margin(mock_ssh):
+    """Tests reading and parsing SNR margin from a Lantiq sysfs file."""
+    hal = LantiqDslHal(mock_ssh)
+    hal.driver_path = "/sys/class/dsl/dsl0" # Assume driver is found
 
-    # Expected address for profile_control on KN-2410 is 0xBE000000 + 0x2A04
-    expected_address_hex = "0xbe002a04"
+    # Simulate the content of the snr_margin_downstream file (value is in 1/10 dB)
+    mock_ssh.execute_command.return_value = ("98", "")
 
-    # Simulate the output of a successful devmem2 read
-    devmem_output = f"Value at address {expected_address_hex} (0x...): 0x11"
-    mock_ssh_interface.execute_command.return_value = (devmem_output, "")
+    snr = hal.get_snr_margin()
 
-    value = dsl_interface.read_dsl_register('profile_control')
+    mock_ssh.execute_command.assert_called_with("cat /sys/class/dsl/dsl0/snr_margin_downstream")
+    assert snr == 9.8
 
-    # Verify the correct command was sent
-    mock_ssh_interface.execute_command.assert_called_once_with(f"devmem2 {expected_address_hex}")
+def test_lantiq_hal_set_snr_margin(mock_ssh):
+    """Tests writing a new SNR margin target to a Lantiq sysfs file."""
+    hal = LantiqDslHal(mock_ssh)
+    hal.driver_path = "/sys/class/dsl/dsl0"
+    mock_ssh.execute_command.return_value = ("", "") # Simulate success
 
-    # Verify the parsed value
-    assert value == "0x11"
+    result = hal.set_snr_margin(50) # Set target to 50%
 
-def test_write_dsl_register_success(dsl_interface, mock_ssh_interface):
-    """
-    Tests a successful write to a DSL register.
-    """
-    dsl_interface.hardware_model = "KN-1010"
-    dsl_interface.hardware_specs = KEENETIC_HARDWARE_MATRIX["KN-1010"]
-
-    expected_address_hex = "0xbc001c08" # snr_margin
-    value_to_write = "0x100"
-
-    # Simulate a successful write (no stderr output)
-    mock_ssh_interface.execute_command.return_value = ("", "")
-
-    result = dsl_interface.write_dsl_register('snr_margin', value_to_write)
-
-    # Verify the correct command was sent
-    expected_command = f"devmem2 {expected_address_hex} w {value_to_write}"
-    mock_ssh_interface.execute_command.assert_called_once_with(expected_command)
-
+    expected_command = "echo 50 > /sys/class/dsl/dsl0/snr_margin_target"
+    mock_ssh.execute_command.assert_called_once_with(expected_command)
     assert result is True
-
-def test_write_dsl_register_ssh_error(dsl_interface, mock_ssh_interface):
-    """
-    Tests that a register write fails if the SSH command returns an error.
-    """
-    dsl_interface.hardware_model = "KN-1010"
-    dsl_interface.hardware_specs = KEENETIC_HARDWARE_MATRIX["KN-1010"]
-
-    # Simulate a failed write
-    mock_ssh_interface.execute_command.return_value = (None, "devmem2: command not found")
-
-    result = dsl_interface.write_dsl_register('snr_margin', '0x100')
-
-    assert result is False
