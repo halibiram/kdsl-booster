@@ -86,6 +86,10 @@ class DynamicSNRSpoofer:
         return round(target_snr_db, 1)
 
 
+from src.entware_ssh import EntwareSSHInterface
+from src.kernel_dsl_access import write_kernel_parameter
+
+
 class KernelDSLManipulator:
     """
     Orchestrates the manipulation of DSL kernel parameters.
@@ -94,26 +98,66 @@ class KernelDSLManipulator:
     then uses the kernel_dsl_access functions to write these values to the
     live system, effectively spoofing the line parameters.
     """
-    def __init__(self, ssh_interface):
+
+    def __init__(
+        self,
+        ssh_interface: EntwareSSHInterface,
+        base_rate_mbps: float,
+        base_snr_db: float,
+    ):
         """
-        Initializes the manipulator with an active SSH interface.
+        Initializes the manipulator with an active SSH interface and baseline metrics.
 
         Args:
             ssh_interface: An active EntwareSSHInterface instance.
+            base_rate_mbps: The current, measured data rate in Mbps.
+            base_snr_db: The current, measured SNR in dB.
         """
         self.ssh_interface = ssh_interface
+        self.snr_spoofer = DynamicSNRSpoofer(base_rate_mbps, base_snr_db)
 
-    def manipulate_phy_registers(self):
-        """
-        A placeholder method for direct PHY chipset register manipulation.
+        # Hypothetical paths for kernel parameters. In a real scenario, these
+        # would be discovered or configured based on the target device.
+        self.PARAM_PATHS = {
+            "snr_margin": "/sys/module/dsl/parameters/snr_margin_override",
+            "attenuation": "/sys/module/dsl/parameters/attenuation_override",
+        }
 
-        This method will eventually contain the logic to:
-        - Override SNR reporting registers.
-        - Bypass attenuation calculation.
-        - Inject loop qualification data.
+    def set_target_profile(
+        self, target_rate_mbps: float, target_distance_m: int
+    ) -> dict:
         """
-        print("Manipulating PHY registers (placeholder)...")
-        # Example of future logic:
-        # target_snr = 55.0
-        # write_kernel_parameter(self.ssh_interface, "/sys/module/dsl/parameters/snr", str(target_snr))
-        pass
+        Calculates and applies a new DSL profile based on target rate and distance.
+
+        Args:
+            target_rate_mbps: The desired data rate in Mbps.
+            target_distance_m: The simulated target distance in meters.
+
+        Returns:
+            A dictionary reporting the success of each parameter write operation.
+        """
+        print(f"Setting target profile: {target_rate_mbps} Mbps at {target_distance_m}m")
+
+        # 1. Calculate target parameters from models
+        target_snr = self.snr_spoofer.calculate_optimal_snr_curve(target_rate_mbps)
+        target_attenuation = calculate_realistic_attenuation(target_distance_m)
+
+        print(f"Calculated Targets -> SNR: {target_snr} dB, Attenuation: {target_attenuation} dB")
+
+        # 2. Write parameters to the kernel via SSH
+        results = {}
+
+        # Write SNR margin
+        snr_path = self.PARAM_PATHS["snr_margin"]
+        results["snr_margin_set"] = write_kernel_parameter(
+            self.ssh_interface, snr_path, str(target_snr)
+        )
+
+        # Write attenuation
+        attenuation_path = self.PARAM_PATHS["attenuation"]
+        results["attenuation_set"] = write_kernel_parameter(
+            self.ssh_interface, attenuation_path, str(target_attenuation)
+        )
+
+        print(f"Manipulation results: {results}")
+        return results
