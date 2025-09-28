@@ -14,6 +14,10 @@ from src.spoofing import calculate_realistic_attenuation, DynamicSNRSpoofer
 class AIOptimizer:
     """
     Uses a simple machine learning model to predict optimal DSL parameters.
+
+    This class takes experimental data, trains a multi-output regression model
+    (predicting SNR and Attenuation from a single feature, Speed), and then uses
+    that model to predict the best parameters to achieve a new target speed.
     """
 
     def __init__(self):
@@ -27,14 +31,18 @@ class AIOptimizer:
 
     def _prepare_data(self, experiment_results: list) -> tuple:
         """
-        Prepares training data from experiment results.
+        Prepares training data from raw experiment results for the ML model.
+
+        This method filters for successful experiments, extracts the measured
+        speed as the input feature (X), and reconstructs the parameters that
+        were used (target SNR and attenuation) as the output targets (y).
 
         Args:
             experiment_results: A list of result dictionaries from ExperimentRunner.
 
         Returns:
-            A tuple containing feature matrix X (measured speeds) and
-            target matrix y (the parameters that produced those speeds).
+            A tuple containing the feature matrix X (measured speeds) and the
+            target matrix y (SNR, Attenuation).
         """
         features = []
         targets = []
@@ -65,7 +73,10 @@ class AIOptimizer:
 
     def train(self, experiment_results: list):
         """
-        Trains the machine learning model on the provided experiment data.
+        Trains the internal regression model on the provided experiment data.
+
+        It prepares the data and fits the model. If there is insufficient valid
+        data (less than 2 samples), training is skipped.
 
         Args:
             experiment_results: A list of result dictionaries from ExperimentRunner.
@@ -83,14 +94,16 @@ class AIOptimizer:
 
     def predict_optimal_params(self, target_rate_mbps: float) -> dict | None:
         """
-        Predicts the optimal SNR and attenuation for a target data rate.
+        Predicts the optimal SNR and attenuation for a given target data rate.
+
+        Uses the trained linear regression model to make a prediction.
 
         Args:
             target_rate_mbps: The desired data rate in Mbps.
 
         Returns:
-            A dictionary with the predicted 'snr' and 'attenuation', or None if
-            the model is not trained.
+            A dictionary with the predicted 'predicted_snr' and
+            'predicted_attenuation', or None if the model is not yet trained.
         """
         if not self._is_trained:
             print("Model is not trained yet. Please train the model first.")

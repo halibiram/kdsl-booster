@@ -105,57 +105,66 @@ class EntwareSSHInterface:
     def _manage_connection(self):
         """
         The core loop for the background thread that manages the SSH connection.
-        Handles keepalives and automatic reconnection.
+
+        This method continuously checks the connection status. If the connection
+        is active, it sends a keepalive command. If it's down, it enters a
+        reconnection loop that attempts to re-establish the connection with
+        an exponential backoff delay.
         """
         while not self._stop_event.is_set():
             is_active = False
             if self.is_connected:
                 try:
+                    # Use a lock to safely access the shared ssh_client object
                     with self._lock:
                         if self.ssh_client.get_transport():
                             is_active = self.ssh_client.get_transport().is_active()
-                except Exception:
+                except Exception as e:
+                    print(f"Error checking connection status: {e}")
                     is_active = False
 
             if not is_active:
-                # Connection is down, attempt to reconnect.
-                with self._lock:
-                    self.is_connected = False
-                    self.is_reconnecting = True
-
-                print("Connection lost. Attempting to reconnect...")
-                reconnection_delay = 5
-                max_reconnection_delay = 300
-
-                while not self._stop_event.is_set():
-                    try:
-                        with self._lock:
-                            # Close old client and create a new one
-                            self.ssh_client.close()
-                            self.ssh_client = paramiko.SSHClient()
-                            self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                            self.ssh_client.connect(
-                                hostname=self.host, port=self.ssh_port,
-                                username=self.username, password=self.password, timeout=10
-                            )
-                            self.is_connected = True
-                            self.is_reconnecting = False
-                        print("Reconnection successful.")
-                        break # Exit reconnection loop
-                    except Exception as e:
-                        print(f"Reconnection failed: {e}. Retrying in {reconnection_delay} seconds...")
-                        self._stop_event.wait(reconnection_delay)
-                        reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
-
-                if not self.is_connected:
-                    # disconnect() was called during reconnection attempts
+                self._handle_reconnection()
+                # If disconnect() was called during reconnection, exit the thread
+                if not self.is_connected and self._stop_event.is_set():
                     break
+            else:
+                # If the connection is active, send a keepalive command
+                print("Connection is active. Sending keepalive...")
+                self.execute_command("echo 'keepalive'")
+                self._stop_event.wait(self.keepalive_interval)
 
-            # If we are here, we are connected (or just reconnected).
-            # Send keepalive and wait.
-            print("Sending keepalive...")
-            self.execute_command("echo 'keepalive'")
-            self._stop_event.wait(self.keepalive_interval)
+    def _handle_reconnection(self):
+        """
+        Manages the reconnection logic with exponential backoff.
+        """
+        with self._lock:
+            self.is_connected = False
+            self.is_reconnecting = True
+
+        print("Connection lost. Attempting to reconnect...")
+        reconnection_delay = 5
+        max_reconnection_delay = 300
+
+        while not self._stop_event.is_set():
+            try:
+                with self._lock:
+                    # Create a new client instance for a clean connection attempt
+                    self.ssh_client.close()
+                    self.ssh_client = paramiko.SSHClient()
+                    self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    self.ssh_client.connect(
+                        hostname=self.host, port=self.ssh_port,
+                        username=self.username, password=self.password, timeout=10
+                    )
+                    self.is_connected = True
+                    self.is_reconnecting = False
+                print("Reconnection successful.")
+                return  # Exit reconnection loop
+            except Exception as e:
+                print(f"Reconnection failed: {e}. Retrying in {reconnection_delay} seconds...")
+                self._stop_event.wait(reconnection_delay)
+                reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
 
     def detect_entware_environment(self):
         """
