@@ -2,3 +2,4 @@ paramiko
 pytest
 pytest-mock
 numpy
+scikit-learn
