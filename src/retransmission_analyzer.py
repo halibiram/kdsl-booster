@@ -48,11 +48,14 @@ class RetransmissionAnalyzer:
         """
         logging.info(f"Attempting to detect active G.inp state from SNMP for vendor: {vendor}...")
         vendor_snmp_sig = self.signatures.get(vendor, {}).get('snmp', {})
-        status_oid = vendor_snmp_sig.get('retransmission_status_oid')
+        status_config = vendor_snmp_sig.get('retransmission_status')
 
-        if not status_oid:
-            logging.warning(f"No retransmission status OID found for vendor '{vendor}' in signatures.")
+        if not status_config or 'oid' not in status_config or 'status_mapping' not in status_config:
+            logging.warning(f"Incomplete retransmission status SNMP config for vendor '{vendor}' in signatures.")
             return None
+
+        status_oid = status_config['oid']
+        status_mapping = status_config['status_mapping']
 
         command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {status_oid}"
         try:
@@ -70,9 +73,9 @@ class RetransmissionAnalyzer:
             match = re.search(r'\d+', output_str)
             if match:
                 status_code = int(match.group(0))
-                if status_code == 1: # Assuming 1 means active
+                if status_code == status_mapping.get('active'):
                     is_active = True
-                elif status_code == 2: # Assuming 2 means inactive
+                elif status_code == status_mapping.get('inactive'):
                     is_active = False
 
         if is_active == "unknown":
@@ -85,7 +88,7 @@ class RetransmissionAnalyzer:
             "raw_data": f"OID: {status_oid}, Value: {output_str}"
         }
 
-    def detect_all_retransmission_capabilities(self, vendor: str) -> dict:
+    def detect_all_retransmission_capabilities(self, vendor: str, target_ip: str = '192.168.1.1', community: str = 'public') -> dict:
         """
         Runs all available retransmission detection methods and consolidates the results
         into a comprehensive profile.
@@ -103,7 +106,7 @@ class RetransmissionAnalyzer:
                 g_inp_supported = True
 
         # --- SNMP Method for Operational State ---
-        snmp_result = self.detect_retransmission_from_snmp(vendor)
+        snmp_result = self.detect_retransmission_from_snmp(vendor, target_ip=target_ip, community=community)
         if snmp_result:
             detailed_findings.append(snmp_result)
             if snmp_result.get("is_active"):

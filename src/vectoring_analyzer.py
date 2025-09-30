@@ -52,11 +52,14 @@ class VectoringAnalyzer:
         """
         logging.info(f"Attempting to detect active vectoring state from SNMP for vendor: {vendor}...")
         vendor_snmp_sig = self.signatures.get(vendor, {}).get('snmp', {})
-        status_oid = vendor_snmp_sig.get('vectoring_status_oid')
+        status_config = vendor_snmp_sig.get('vectoring_status')
 
-        if not status_oid:
-            logging.warning(f"No vectoring status OID found for vendor '{vendor}' in signatures.")
+        if not status_config or 'oid' not in status_config or 'status_mapping' not in status_config:
+            logging.warning(f"Incomplete vectoring status SNMP config for vendor '{vendor}' in signatures.")
             return None
+
+        status_oid = status_config['oid']
+        status_mapping = status_config['status_mapping']
 
         command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {status_oid}"
         try:
@@ -69,15 +72,14 @@ class VectoringAnalyzer:
             return None
 
         output_str = stdout.strip()
-        # Typically, an integer value is returned. '1' for enabled/active, '2' for disabled.
         is_active = "unknown"
         if "no such object" not in output_str.lower():
             match = re.search(r'\d+', output_str)
             if match:
                 status_code = int(match.group(0))
-                if status_code == 1:
+                if status_code == status_mapping.get('active'):
                     is_active = True
-                elif status_code == 2:
+                elif status_code == status_mapping.get('inactive'):
                     is_active = False
 
         if is_active == "unknown":
@@ -90,7 +92,7 @@ class VectoringAnalyzer:
             "raw_data": f"OID: {status_oid}, Value: {output_str}"
         }
 
-    def detect_all_vectoring_capabilities(self, vendor: str) -> dict:
+    def detect_all_vectoring_capabilities(self, vendor: str, target_ip: str = '192.168.1.1', community: str = 'public') -> dict:
         """
         Runs all available vectoring detection methods and consolidates the results
         into a comprehensive profile.
@@ -107,7 +109,7 @@ class VectoringAnalyzer:
                 hardware_support = True
 
         # --- SNMP Method for Operational State ---
-        snmp_result = self.detect_vectoring_from_snmp(vendor)
+        snmp_result = self.detect_vectoring_from_snmp(vendor, target_ip=target_ip, community=community)
         is_active = False
         if snmp_result:
             detailed_findings.append(snmp_result)

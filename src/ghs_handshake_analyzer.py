@@ -125,88 +125,50 @@ class GHSHandshakeAnalyzer:
             i = 1  # Start after message type
             bonding_bitmap = 0
             while i < len(payload):
+                # A simplified but more robust TLV parser for SIF.
+                # Every parameter should have an ID (Type) and a Length.
+                if i + 1 >= len(payload):
+                    break # Not enough bytes for a full TLV
+
                 param_id = payload[i]
+                param_len = payload[i+1]
 
-                # --- SIF Parameter Parsing ---
+                # Ensure the full parameter is within the payload bounds
+                if i + 2 + param_len > len(payload):
+                    break # Malformed parameter, stop parsing
+
+                data_start_index = i + 2
+
                 # VDSL2 Profiles (ID 0x83)
-                if param_id == 0x83 and i + 2 < len(payload):
-                    param_len = payload[i + 1]
-                    if param_len >= 2 and i + 2 + param_len <= len(payload):
-                        bitmap_val = int.from_bytes(payload[i + 2:i + 4], 'big')
-                        parsed_data["vdsl2_profiles_bitmap"] = bitmap_val
-                    i += 1 + param_len
-                    continue
-
+                if param_id == 0x83 and param_len >= 2:
+                    bitmap_val = int.from_bytes(payload[data_start_index:data_start_index + 2], 'big')
+                    parsed_data["vdsl2_profiles_bitmap"] = bitmap_val
                 # VDSL2 Band Plan (ID 0x84)
-                if param_id == 0x84 and i + 2 < len(payload):
-                    param_len = payload[i + 1]
-                    if param_len >= 1 and i + 2 + param_len <= len(payload):
-                        # The band plan is usually the first byte of the value
-                        parsed_data["band_plan_id"] = payload[i + 2]
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0x84 and param_len >= 1:
+                    parsed_data["band_plan_id"] = payload[data_start_index]
                 # VDSL2 PSD Mask (ID 0x85)
-                if param_id == 0x85 and i + 2 < len(payload):
-                    param_len = payload[i + 1]
-                    if param_len >= 1 and i + 2 + param_len <= len(payload):
-                        # The PSD mask ID is usually the first byte of the value
-                        parsed_data["psd_mask_id"] = payload[i + 2]
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0x85 and param_len >= 1:
+                    parsed_data["psd_mask_id"] = payload[data_start_index]
                 # G.vector/G.993.5 Support (ID 0x86)
-                if param_id == 0x86 and i + 2 < len(payload):
-                    param_len = payload[i + 1]
-                    if param_len >= 1 and i + 2 + param_len <= len(payload):
-                        bitmap_val = payload[i + 2]
-                        parsed_data["g_vector_bitmap"] = bitmap_val
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0x86 and param_len >= 1:
+                    parsed_data["g_vector_bitmap"] = payload[data_start_index]
                 # G.998.1 ATM-based Bonding (ID 0xA0)
-                if param_id == 0xA0 and i + 1 < len(payload):
-                    bonding_bitmap |= (1 << 0) # Bit 0 for G.998.1
-                    param_len = payload[i + 1]
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0xA0:
+                    bonding_bitmap |= (1 << 0)
                 # G.998.2 Ethernet-based Bonding (ID 0xA1)
-                if param_id == 0xA1 and i + 1 < len(payload):
-                    bonding_bitmap |= (1 << 1) # Bit 1 for G.998.2
-                    param_len = payload[i + 1]
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0xA1:
+                    bonding_bitmap |= (1 << 1)
                 # G.998.4 G.inp/Retransmission (ID 0xB0)
-                if param_id == 0xB0 and i + 2 < len(payload):
-                    param_len = payload[i + 1]
-                    if param_len >= 1 and i + 2 + param_len <= len(payload):
-                        # The G.inp bitmap is typically the first byte of the value
-                        parsed_data["g_inp_bitmap"] = payload[i + 2]
-                    i += 1 + param_len
-                    continue
-
+                elif param_id == 0xB0 and param_len >= 1:
+                    parsed_data["g_inp_bitmap"] = payload[data_start_index]
                 # --- NSIF Parameter Parsing ---
-                if param_id == 0x91:  # NSIF Marker
-                    if i + 1 < len(payload):
-                        param_len = payload[i + 1]
-                        if i + 2 + param_len <= len(payload):
-                            nsif_data = payload[i + 2: i + 2 + param_len]
-                            if len(nsif_data) >= 6:
-                                parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
-                                parsed_data["vsi"] = nsif_data[6:]
-                        i += 1 + param_len
-                    else:
-                        break  # Malformed NSIF
-                    continue
+                elif param_id == 0x91 and param_len >= 6:
+                    nsif_data = payload[data_start_index : data_start_index + param_len]
+                    parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
+                    parsed_data["vsi"] = nsif_data[6:]
 
-                # If we don't recognize the parameter, we need to skip it.
-                # A simple SIF parser assumes [ID][Length][Data].
-                # If we don't have a proper length, we can't reliably skip.
-                # For this simplified parser, we'll just move to the next byte
-                # if it's not a parameter we're actively looking for.
-                i += 1
+                # Move to the next parameter using the length byte
+                i += 2 + param_len
 
             if bonding_bitmap > 0:
                 parsed_data["bonding_bitmap"] = bonding_bitmap

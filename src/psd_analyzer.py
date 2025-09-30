@@ -91,7 +91,7 @@ class PSDAnalyzer:
             "raw_data": f"OID: {psd_oid}, Value: {output_str}"
         }
 
-    def detect_all_psd_capabilities(self, vendor: str) -> dict:
+    def detect_all_psd_capabilities(self, vendor: str, target_ip: str = '192.168.1.1', community: str = 'public') -> dict:
         """
         Runs all available PSD detection methods and consolidates the results
         into a comprehensive profile.
@@ -107,7 +107,7 @@ class PSDAnalyzer:
             psd_mask_class = ghs_result.get("psd_mask_class", "Unknown")
 
         # --- SNMP Method ---
-        snmp_result = self.detect_psd_from_snmp(vendor)
+        snmp_result = self.detect_psd_from_snmp(vendor, target_ip=target_ip, community=community)
         if snmp_result:
             detailed_findings.append(snmp_result)
             # Prefer the SNMP result as it's more likely to be the active config

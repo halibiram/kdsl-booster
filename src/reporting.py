@@ -1,7 +1,7 @@
 """
 This module provides the ReportGenerator class, which is responsible for
 formatting the results of a DSLAM detection into various output formats,
-including human-readable text, JSON, and CSV.
+including a comprehensive text profile, JSON, and CSV.
 """
 import json
 import csv
@@ -10,59 +10,158 @@ from datetime import datetime
 
 class ReportGenerator:
     """
-    Formats detection results into structured and human-readable reports.
+    Formats detection and capability analysis results into structured reports.
     """
 
     def __init__(self, detection_result: dict | None):
         """
-        Initializes the report generator with the detection result.
-
-        Args:
-            detection_result: The final dictionary output from the
-                              UniversalDSLAMDetector's identify_vendor method.
+        Initializes the report generator with the full result dictionary.
         """
-        self.result = detection_result
+        self.result = detection_result if detection_result else {}
         self.timestamp = datetime.now().isoformat()
+        self.capabilities = self.result.get('capability_analysis', {})
+
+    def _format_section(self, title: str, lines: list[str], indent: str = "  ") -> list[str]:
+        """Helper to format a section with a title and indented lines."""
+        if not any(line.strip() for line in lines):
+            return []
+        return [f"├── {title}"] + [f"│   {indent}{line}" for line in lines]
+
+    def _format_vdsl_profiles(self) -> list[str]:
+        data = self.capabilities.get('vdsl2_profiles', {})
+        profiles = data.get('consolidated_profiles', [])
+        return [f"Supported Profiles: {', '.join(profiles) if profiles else 'None'}"]
+
+    def _format_vectoring(self) -> list[str]:
+        data = self.capabilities.get('vectoring', {})
+        return [
+            f"Hardware Support: {'Yes' if data.get('hardware_support') else 'No'}",
+            f"Currently Active: {'Yes' if data.get('is_active') else 'No'}"
+        ]
+
+    def _format_bonding(self) -> list[str]:
+        data = self.capabilities.get('bonding', {})
+        standards = data.get('supported_standards', [])
+        return [
+            f"Standards Supported: {', '.join(standards) if standards else 'None'}",
+            f"Currently Active: {'Yes' if data.get('is_active') else 'No'}"
+        ]
+
+    def _format_frequency(self) -> list[str]:
+        data = self.capabilities.get('frequency', {})
+        return [
+            f"Maximum Downstream: {data.get('max_downstream_mhz', 'N/A')} MHz",
+            f"Maximum Upstream: {data.get('max_upstream_mhz', 'N/A')} MHz",
+            f"Active Band Plan: {data.get('band_plan', 'N/A')}"
+        ]
+
+    def _format_retransmission(self) -> list[str]:
+        data = self.capabilities.get('retransmission', {})
+        return [
+            f"G.inp Support: {'Yes' if data.get('g_inp_supported') else 'No'}",
+            f"Currently Active: {'Yes' if data.get('is_active') else 'No'}"
+        ]
+
+    def _format_psd(self) -> list[str]:
+        data = self.capabilities.get('psd', {})
+        return [
+            f"PSD Mask Class: {data.get('psd_mask_class', 'N/A')}"
+        ]
+
+    def _format_optimization_analysis(self) -> list[str]:
+        data = self.capabilities.get('optimization_analysis', {})
+        lines = []
+        warnings = data.get('warnings', [])
+        recommendations = data.get('recommendations', [])
+        if warnings:
+            lines.append("Warnings:")
+            for warning in warnings:
+                lines.append(f"  - {warning}")
+        if recommendations:
+            lines.append("Recommendations:")
+            for rec in recommendations:
+                lines.append(f"  - {rec}")
+        return lines
 
     def generate_text_report(self) -> str:
         """
-        Generates a human-readable text summary of the detection results.
+        Generates a comprehensive, human-readable text profile of the DSLAM.
         """
         if not self.result:
-            return "DSLAM Detection Report\n" \
-                   "------------------------\n" \
-                   f"Timestamp: {self.timestamp}\n" \
-                   "Result: No vendor identified.\n"
+            return "DSLAM Capability Profile: No data available."
 
-        report_lines = [
-            "DSLAM Detection Report",
-            "------------------------",
-            f"Timestamp: {self.timestamp}",
-            f"Primary Vendor Identified: {self.result.get('primary_vendor', 'N/A')}",
-            f"Overall Confidence: {self.result.get('overall_confidence', 0.0)}%",
-            "\nContributing Evidence:",
-            "----------------------"
+        report_lines = ["DSLAM Capability Profile:"]
+
+        # Basic Information
+        basic_info = [
+            f"Vendor: {self.result.get('primary_vendor', 'N/A')}",
+            f"Confidence: {self.result.get('overall_confidence', 0.0)}%"
         ]
+        report_lines.extend(self._format_section("Basic Information", basic_info))
 
-        for evidence in self.result.get('contributing_methods', []):
-            line = (
-                f"- Method: {evidence.get('method', 'N/A'):<8} | "
-                f"Certainty: {evidence.get('certainty', 0):>3}% | "
-                f"Data: {evidence.get('raw_data', 'N/A')}"
-            )
-            report_lines.append(line)
+        # Capability Sections
+        report_lines.extend(self._format_section("VDSL2 Profile Support", self._format_vdsl_profiles()))
+        report_lines.extend(self._format_section("Vectoring Capabilities", self._format_vectoring()))
+        report_lines.extend(self._format_section("Bonding Capabilities", self._format_bonding()))
+        report_lines.extend(self._format_section("Frequency Support", self._format_frequency()))
+        report_lines.extend(self._format_section("Retransmission Support", self._format_retransmission()))
+        report_lines.extend(self._format_section("PSD Configuration", self._format_psd()))
+        report_lines.extend(self._format_section("Optimization Recommendations", self._format_optimization_analysis()))
 
         return "\n".join(report_lines)
 
     def generate_json_report(self) -> str:
         """
-        Generates a structured JSON report of the detection results.
+        Generates a structured JSON report matching the comprehensive profile.
         """
-        report_data = {
-            "detection_timestamp": self.timestamp,
-            "detection_result": self.result
+        if not self.result:
+            return json.dumps({"DSLAM Capability Profile": {"error": "No data available."}}, indent=2)
+
+        profile_data = {
+            "Basic Information": {
+                "Vendor": self.result.get('primary_vendor', 'N/A'),
+                "Model": "Unknown", # Placeholder
+                "Firmware": "Unknown", # Placeholder
+                "Chipset": "Unknown" # Placeholder
+            },
+            "VDSL2 Profile Support": {
+                "Supported Profiles": self.capabilities.get('vdsl2_profiles', {}).get('consolidated_profiles', []),
+                "Currently Active Profile": "Unknown", # Placeholder
+            },
+            "Vectoring Capabilities": {
+                "Hardware Support": self.capabilities.get('vectoring', {}).get('hardware_support', False),
+                "Currently Active": self.capabilities.get('vectoring', {}).get('is_active', False),
+            },
+            "Bonding Capabilities": {
+                "Standards Supported": self.capabilities.get('bonding', {}).get('supported_standards', []),
+                "Currently Bonded": self.capabilities.get('bonding', {}).get('is_active', False),
+            },
+            "Frequency Support": {
+                "Maximum Downstream": self.capabilities.get('frequency', {}).get('max_downstream_mhz'),
+                "Maximum Upstream": self.capabilities.get('frequency', {}).get('max_upstream_mhz'),
+                "Active Band Plan": self.capabilities.get('frequency', {}).get('band_plan'),
+            },
+            "Retransmission Support": {
+                "G.inp Support": self.capabilities.get('retransmission', {}).get('g_inp_supported', False),
+                "Currently Active": self.capabilities.get('retransmission', {}).get('is_active', False),
+            },
+            "PSD Configuration": {
+                "Downstream PSD Mask": self.capabilities.get('psd', {}).get('psd_mask_class', 'N/A'),
+            },
+            "Optimization Recommendations": self.capabilities.get('optimization_analysis', {
+                "warnings": [],
+                "recommendations": []
+            })
         }
-        return json.dumps(report_data, indent=2)
+
+        full_report = {
+            "DSLAM Capability Profile": profile_data,
+            "_metadata": {
+                "timestamp": self.timestamp,
+                "raw_detection_result": self.result
+            }
+        }
+        return json.dumps(full_report, indent=2)
 
     def generate_csv_report(self) -> str:
         """

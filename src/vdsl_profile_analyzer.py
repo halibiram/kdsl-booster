@@ -93,7 +93,7 @@ class VDSLProfileAnalyzer:
             "raw_data": f"OID: {profiles_oid}, Value: {output_str}"
         }
 
-    def detect_all_profiles(self, vendor: str) -> dict:
+    def detect_all_profiles(self, vendor: str, target_ip: str = '192.168.1.1', community: str = 'public') -> dict:
         """
         Runs all available VDSL2 profile detection methods and consolidates the results.
         """
@@ -106,7 +106,7 @@ class VDSLProfileAnalyzer:
             all_findings.append(ghs_result)
 
         # --- SNMP Method ---
-        snmp_result = self.detect_profiles_from_snmp(vendor)
+        snmp_result = self.detect_profiles_from_snmp(vendor, target_ip=target_ip, community=community)
         if snmp_result:
             all_findings.append(snmp_result)
 

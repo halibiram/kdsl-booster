@@ -93,7 +93,7 @@ class FrequencyAnalyzer:
             "raw_data": f"OID: {freq_oid}, Value: {output_str}"
         }
 
-    def detect_all_frequency_capabilities(self, vendor: str) -> dict:
+    def detect_all_frequency_capabilities(self, vendor: str, target_ip: str = '192.168.1.1', community: str = 'public') -> dict:
         """
         Runs all available frequency detection methods and consolidates the results
         into a comprehensive profile.
@@ -115,7 +115,7 @@ class FrequencyAnalyzer:
             consolidated_results["max_upstream_mhz"] = ghs_result.get("max_upstream_mhz")
 
         # --- SNMP Method ---
-        snmp_result = self.detect_frequency_from_snmp(vendor)
+        snmp_result = self.detect_frequency_from_snmp(vendor, target_ip=target_ip, community=community)
         if snmp_result:
             detailed_findings.append(snmp_result)
             # SNMP might provide a more accurate max downstream frequency, so prefer it if available.
