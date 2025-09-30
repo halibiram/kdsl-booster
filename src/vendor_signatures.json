@@ -10,6 +10,10 @@
             "vendor_patterns": ["huawei"],
             "model_patterns": ["ma5600", "ma5608", "ma5680"]
         },
+        "tr069": {
+            "manufacturer_patterns": ["Huawei", "HWTC"],
+            "acs_url_patterns": ["/acs", "/tr069"]
+        },
         "ghs": {
             "signatures": [
                 {
@@ -38,6 +42,10 @@
             "vendor_patterns": ["nokia", "alcatel", "alu"],
             "model_patterns": ["7330", "7302", "isam"]
         },
+        "tr069": {
+            "manufacturer_patterns": ["Nokia", "Alcatel-Lucent", "ALCL"],
+            "acs_url_patterns": ["/cwmp"]
+        },
         "ghs": {
             "signatures": [
                 {
@@ -65,6 +73,10 @@
         "dns": {
             "vendor_patterns": ["zte"],
             "model_patterns": ["c320", "zxa10"]
+        },
+        "tr069": {
+            "manufacturer_patterns": ["ZTE", "ZTEG"],
+            "acs_url_patterns": ["/acs"]
         },
         "ghs": {
             "signatures": [
