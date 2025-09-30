@@ -28,6 +28,7 @@ class EntwareSSHInterface:
 
         self._ssh_client = None
         self._is_connected = False
+        self._is_reconnecting = False
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._connection_thread = None
@@ -107,8 +108,8 @@ class EntwareSSHInterface:
         """
         with self._lock:
             self.last_used = time.time()
-            if not self.is_connected():
-                logging.warning("Cannot execute command: SSH client is not connected.")
+            if not self._is_connected or self._is_reconnecting:
+                logging.warning("Cannot execute command: SSH client is not connected or reconnecting.")
                 return None, "Not connected"
 
             try:
@@ -136,6 +137,9 @@ class EntwareSSHInterface:
                 return None, str(e)
             except Exception as e:
                 logging.error(f"Failed to execute command '{command}': {e}")
+                # After a command failure, trigger a connection check
+                with self._lock:
+                    self._is_connected = False
                 return None, str(e)
 
     def is_connected(self):
@@ -151,55 +155,76 @@ class EntwareSSHInterface:
             except EOFError:
                 return False
 
+    def _send_keepalive(self):
+        """Separate keepalive logic"""
+        try:
+            with self._lock:
+                if self._is_connected and self._ssh_client.get_transport():
+                    # Use transport-level keepalive instead of command execution
+                    transport = self._ssh_client.get_transport()
+                    transport.send_ignore()
+        except Exception as e:
+            logging.warning(f"Keepalive failed: {e}")
+
     def _manage_connection(self):
         """
         Core loop for the background thread. Monitors connection, sends keepalives,
         and triggers reconnection on failure.
         """
         while not self._stop_event.is_set():
-            if not self.is_connected():
-                logging.warning("Connection lost. Starting reconnection process.")
-                self._handle_reconnection()
+            should_reconnect = False
+            with self._lock:
+                is_active = False
+                if self._is_connected and self._ssh_client and self._ssh_client.get_transport():
+                    try:
+                        is_active = self._ssh_client.get_transport().is_active()
+                    except Exception:
+                        is_active = False
+
+                if not is_active and not self._is_reconnecting:
+                    self._is_connected = False
+                    self._is_reconnecting = True
+                    should_reconnect = True
+
+            if should_reconnect:
+                self._attempt_reconnection()
             else:
-                try:
-                    # Use Paramiko's built-in keepalive mechanism
-                    self._ssh_client.get_transport().send_keepalive(self.keepalive_interval)
-                except Exception as e:
-                    logging.warning(f"Failed to send keepalive: {e}. Assuming connection is lost.")
-                    self._handle_reconnection()
+                self._send_keepalive()
+                self._stop_event.wait(self.keepalive_interval)
 
-            self._stop_event.wait(self.keepalive_interval)
-
-    def _handle_reconnection(self):
-        """
-        Manages the reconnection logic with exponential backoff.
-        """
+    def _attempt_reconnection(self):
+        """Separate reconnection logic for clarity"""
+        logging.info("Connection lost. Attempting to reconnect...")
         reconnection_delay = 5
         max_reconnection_delay = 300
 
         while not self._stop_event.is_set():
-            with self._lock:
-                self._is_connected = False
-                if self._ssh_client:
-                    self._ssh_client.close()
+            try:
+                # Close the old client and create a new one outside the main lock
+                with self._lock:
+                    if self._ssh_client:
+                        self._ssh_client.close()
+                    self._ssh_client = self._create_ssh_client()
 
-                self._ssh_client = self._create_ssh_client()
-                try:
-                    logging.info(f"Attempting to reconnect to {self.host}...")
-                    self._ssh_client.connect(
-                        hostname=self.host, port=self.ssh_port,
-                        username=self.username, password=self.password,
-                        timeout=self.connect_timeout
-                    )
+                # Attempt to connect without holding the lock for the entire duration
+                self._ssh_client.connect(
+                    hostname=self.host,
+                    port=self.ssh_port,
+                    username=self.username,
+                    password=self.password,
+                    timeout=self.connect_timeout
+                )
+
+                # If connection is successful, update state under lock
+                with self._lock:
                     self._is_connected = True
-                    logging.info("Reconnection successful.")
-                    return  # Exit the reconnection loop on success
-                except Exception as e:
-                    logging.error(f"Reconnection failed: {e}. Retrying in {reconnection_delay}s.")
-
-            self._stop_event.wait(reconnection_delay)
-            reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
-
+                    self._is_reconnecting = False
+                logging.info("Reconnection successful.")
+                break  # Exit the reconnection loop
+            except Exception as e:
+                logging.error(f"Reconnection failed: {e}. Retrying in {reconnection_delay}s...")
+                self._stop_event.wait(reconnection_delay)
+                reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
 
 class EntwareSSHConnectionPool:
     """
