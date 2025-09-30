@@ -12,7 +12,8 @@ It simulates a multi-method detection scenario:
 4. Runs vendor identification.
 5. Runs VDSL2 profile detection.
 6. Runs Vectoring detection.
-7. Initializes and prints comprehensive reports.
+7. Runs Bonding detection.
+8. Initializes and prints comprehensive reports.
 """
 import logging
 import json
@@ -21,19 +22,23 @@ from src.dslam_detector import UniversalDSLAMDetector
 from src.reporting import ReportGenerator
 from src.vdsl_profile_analyzer import VDSLProfileAnalyzer
 from src.vectoring_analyzer import VectoringAnalyzer
+from src.bonding_analyzer import BondingAnalyzer
 
 # --- Mock Data Configuration ---
 HUAWEI_GHS_ANALYSIS = {
     "vendor_id": "HWTC", "vsi": b"MA5608T", "cl_message_payload": b"...",
     "handshake_duration": 195.0,
     "vdsl2_profiles_bitmap": 81,  # 17a, 12a, 8a
-    "g_vector_bitmap": 1         # G.vector supported
+    "g_vector_bitmap": 1,         # G.vector supported
+    "bonding_bitmap": 3           # G.998.1 (ATM) & G.998.2 (Ethernet) supported
 }
 HUAWEI_SNMP_SYS_OID = "1.3.6.1.4.1.2011.2.82.8"
 HUAWEI_VDSL_PROFILES_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.20"
 HUAWEI_VDSL_PROFILES_RESPONSE = "Hex-STRING: 00 C0"  # 30a, 17a
 HUAWEI_VECTORING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.22"
 HUAWEI_VECTORING_STATUS_RESPONSE = "INTEGER: 1"  # Active
+HUAWEI_BONDING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.8.1.1.1"
+HUAWEI_BONDING_STATUS_RESPONSE = "INTEGER: 1"  # Active
 HUAWEI_DNS_HOSTNAME = "dslam-ma5608t-london.huawei.isp.com"
 
 
@@ -43,6 +48,8 @@ def mock_snmp_executor(command: str) -> tuple[str, str]:
         return HUAWEI_VDSL_PROFILES_RESPONSE, ""
     if HUAWEI_VECTORING_STATUS_OID in command:
         return HUAWEI_VECTORING_STATUS_RESPONSE, ""
+    if HUAWEI_BONDING_STATUS_OID in command:
+        return HUAWEI_BONDING_STATUS_RESPONSE, ""
     if "1.3.6.1.2.1.1.2.0" in command:  # sysObjectID OID
         return HUAWEI_SNMP_SYS_OID, ""
     return "", "Timeout"
@@ -65,6 +72,7 @@ def main():
     detector = UniversalDSLAMDetector(mock_ssh_interface, signature_file='src/vendor_signatures.json')
     profile_analyzer = VDSLProfileAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     vectoring_analyzer = VectoringAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
+    bonding_analyzer = BondingAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     print("Components initialized successfully.")
 
     # --- 2. Mocking Detection Method Results ---
@@ -105,8 +113,18 @@ def main():
     else:
         print("❌ Vectoring detection failed.")
 
-    # --- 6. Generate and Display Reports ---
-    print("\n[Step 6] Generating and displaying reports...")
+    # --- 6. Run Bonding Detection ---
+    print("\n[Step 6] Running multi-method bonding detection...")
+    bonding_result = bonding_analyzer.detect_all_bonding_capabilities(vendor=vendor)
+    if bonding_result:
+        standards = ", ".join(bonding_result['supported_standards']) if bonding_result['supported_standards'] else "None"
+        print(f"✅ Bonding detection complete. Supported Standards: {standards}, Active: {bonding_result['is_active']}")
+        vendor_result['capability_analysis']['bonding'] = bonding_result
+    else:
+        print("❌ Bonding detection failed.")
+
+    # --- 7. Generate and Display Reports ---
+    print("\n[Step 7] Generating and displaying reports...")
     report_generator = ReportGenerator(vendor_result)
 
     print("\n\n" + "="*20 + " TEXT REPORT " + "="*20)

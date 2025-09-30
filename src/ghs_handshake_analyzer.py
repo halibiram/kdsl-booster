@@ -95,6 +95,7 @@ class GHSHandshakeAnalyzer:
                 "vsi": cl_message.get("vsi"),
                 "vdsl2_profiles_bitmap": cl_message.get("vdsl2_profiles_bitmap"),
                 "g_vector_bitmap": cl_message.get("g_vector_bitmap"),
+                "bonding_bitmap": cl_message.get("bonding_bitmap"),
                 "full_analysis": cl_message
             })
         else:
@@ -114,10 +115,11 @@ class GHSHandshakeAnalyzer:
 
         parsed_data = {
             "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
-            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None
+            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None
         }
         try:
             i = 1  # Start after message type
+            bonding_bitmap = 0
             while i < len(payload):
                 param_id = payload[i]
 
@@ -135,9 +137,22 @@ class GHSHandshakeAnalyzer:
                 if param_id == 0x86 and i + 2 < len(payload):
                     param_len = payload[i + 1]
                     if param_len >= 1 and i + 2 + param_len <= len(payload):
-                        # The bitmap is typically the first byte of the parameter value
                         bitmap_val = payload[i + 2]
                         parsed_data["g_vector_bitmap"] = bitmap_val
+                    i += 1 + param_len
+                    continue
+
+                # G.998.1 ATM-based Bonding (ID 0xA0)
+                if param_id == 0xA0 and i + 1 < len(payload):
+                    bonding_bitmap |= (1 << 0) # Bit 0 for G.998.1
+                    param_len = payload[i + 1]
+                    i += 1 + param_len
+                    continue
+
+                # G.998.2 Ethernet-based Bonding (ID 0xA1)
+                if param_id == 0xA1 and i + 1 < len(payload):
+                    bonding_bitmap |= (1 << 1) # Bit 1 for G.998.2
+                    param_len = payload[i + 1]
                     i += 1 + param_len
                     continue
 
@@ -161,6 +176,9 @@ class GHSHandshakeAnalyzer:
                 # For this simplified parser, we'll just move to the next byte
                 # if it's not a parameter we're actively looking for.
                 i += 1
+
+            if bonding_bitmap > 0:
+                parsed_data["bonding_bitmap"] = bonding_bitmap
 
         except Exception as e:
             logging.warning(f"Unexpected error while parsing G.hs message: {e}")
