@@ -4,3 +4,4 @@ pytest-mock
 numpy
 scikit-learn
 pytest-cov
+scapy
