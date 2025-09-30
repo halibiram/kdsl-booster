@@ -1,98 +1,94 @@
 """
-DSL Bypass Ultra - Main Execution Script
+DSLAM Detection Ultra - Main Execution Script
 
-This script demonstrates the full end-to-end capabilities of the project.
-It simulates the entire workflow:
+This script demonstrates the full end-to-end capabilities of the project's
+DSLAM vendor detection and reporting system.
+
+It simulates a multi-method detection scenario:
 1. Establishes a (mocked) SSH connection.
-2. Initializes the core components: KernelDSLManipulator, ExperimentRunner, and AIOptimizer.
-3. Runs an automated parameter sweep to collect performance data.
-4. Trains an AI model on the collected data.
-5. Uses the trained model to predict optimal parameters for a target speed.
+2. Initializes the UniversalDSLAMDetector.
+3. Mocks responses for G.hs, SNMP, and DNS detection methods to simulate finding
+   evidence for a specific vendor (Huawei).
+4. Runs the main vendor identification process.
+5. Initializes the ReportGenerator with the results.
+6. Prints a comprehensive report in Text, JSON, and CSV formats.
 """
+import logging
 from unittest.mock import MagicMock
-import numpy as np
+from src.dslam_detector import UniversalDSLAMDetector
+from src.reporting import ReportGenerator
 
-from src.spoofing import KernelDSLManipulator, GHSHandshakeSpoofer
-from src.experimentation import ExperimentRunner
-from src.ai_optimizer import AIOptimizer
+# Mock analysis data to be returned by the mocked analyzers
+HUAWEI_GHS_ANALYSIS = {
+    "vendor_id": "HWTC",
+    "vsi": b"MA5608T",
+    "cl_message_payload": b"\x02\x91\x0f\x00\xb5HWTCMA5608T\x00\x00",
+    "handshake_duration": 195.0
+}
+HUAWEI_SNMP_OID = "1.3.6.1.4.1.2011.2.82.8"
+HUAWEI_DNS_HOSTNAME = "dslam-ma5608t-london.huawei.isp.com"
+
 
 def main():
-    print("🚀 Starting DSL Bypass Ultra Demonstration 🚀")
+    print("🚀 Starting DSLAM Detection & Reporting Demonstration 🚀")
 
     # --- 1. Setup and Initialization ---
-    # In a real scenario, this would be a live SSH connection.
-    # For this demo, we mock the interface to allow the script to run.
     print("\n[Step 1] Initializing components...")
     mock_ssh_interface = MagicMock()
 
-    # Mock the inject_raw_packet method to simulate success for the G.hs spoofer
-    mock_ssh_interface.inject_raw_packet.return_value = True
-
-    def mock_execute_command(command, **kwargs):
-        """A more intelligent mock for SSH commands."""
-        if "cat /proc/device-tree/model" in command:
-            # Respond with a valid Keenetic model to pass hardware detection.
-            return ('KN-1010', '')
-        if "command -v xdslctl" in command:
-            # Respond with a fake path to pass driver discovery.
-            return ('/usr/sbin/xdslctl', '')
-        # Default response for other commands (like setting SNR).
-        return ('', '')
-
-    mock_ssh_interface.execute_command.side_effect = mock_execute_command
-
-    # --- 2. G.hs Handshake Injection Demonstration ---
-    print("\n[Step 2] Demonstrating G.hs Handshake Injection...")
-    ghs_spoofer = GHSHandshakeSpoofer(ssh_interface=mock_ssh_interface)
-
-    # Craft and inject a fake capabilities message to force 35b profile
-    injection_success = ghs_spoofer.craft_and_inject_fake_capabilities(
-        interface='dsl0',
-        vendor_id=b'DSL-BYPASS-ULTRA',
-        profile_35b=True,
-        force_vectoring=True
-    )
-
-    if injection_success:
-        print("G.hs injection demonstration successful.")
-    else:
-        print("G.hs injection demonstration failed.")
-
-    # --- 3. Kernel-Level Manipulation Setup ---
-    print("\n[Step 3] Initializing components for kernel-level manipulation...")
-    manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface)
-    experiment_runner = ExperimentRunner(manipulator=manipulator, ssh_interface=mock_ssh_interface)
-    ai_optimizer = AIOptimizer()
+    # The detector will be initialized with this mock interface.
+    # We will mock the analyzer methods directly on the detector's instances.
+    detector = UniversalDSLAMDetector(mock_ssh_interface)
     print("Components initialized successfully.")
 
-    # --- 4. Automated Data Collection ---
-    print("\n[Step 4] Running automated parameter sweep to collect data...")
+    # --- 2. Mocking Detection Method Results ---
+    print("\n[Step 2] Mocking analyzer results to simulate a detection scenario...")
 
-    # To keep the demo fast, we'll test a small but effective range of parameters.
-    rate_range = np.arange(40, 151, 10)  # 40, 50, ..., 150 Mbps
-    distance_range = np.arange(20, 301, 40) # 20, 60, ..., 300 m
+    # Simulate a successful G.hs and Timing analysis
+    detector.ghs_analyzer.analyze_capture.return_value = HUAWEI_GHS_ANALYSIS
 
-    experiment_runner.parameter_sweep(rate_range, distance_range)
-    print(f"Data collection complete. {len(experiment_runner.results)} experiments run.")
+    # Simulate a successful SNMP analysis
+    detector.ssh.execute_command.side_effect = lambda cmd: (HUAWEI_SNMP_OID, "") if "snmpget" in cmd else ("", "")
 
-    # --- 5. AI Model Training ---
-    print("\n[Step 5] Training AI model on collected data...")
-    ai_optimizer.train(experiment_runner.results)
+    # Simulate a successful DNS analysis
+    detector.dns_analyzer.get_hostname_by_ip.return_value = HUAWEI_DNS_HOSTNAME
 
-    # --- 6. AI-Powered Prediction ---
-    print("\n[Step 6] Using trained AI model to predict optimal parameters...")
-    target_speed = 125.0
-    predicted_params = ai_optimizer.predict_optimal_params(target_speed)
+    # Simulate failures for other methods
+    detector.dhcp_analyzer.capture_and_analyze.return_value = None
+    detector.tr069_analyzer.capture_and_analyze.return_value = None
 
-    if predicted_params:
-        print("\n✅ --- FINAL RESULT --- ✅")
-        print(f"To achieve a target speed of {target_speed} Mbps, the AI suggests:")
-        print(f"  - Predicted SNR Margin: {predicted_params['predicted_snr']} dB")
-        print(f"  - Predicted Attenuation: {predicted_params['predicted_attenuation']} dB")
+    print("Mocks configured for a multi-method Huawei detection.")
+
+    # --- 3. Run Vendor Identification ---
+    print("\n[Step 3] Running multi-method vendor identification...")
+    # We specify the methods to run to match our mocked scenario
+    final_result = detector.identify_vendor(methods=['g_hs', 'snmp', 'dns', 'timing'])
+
+    if final_result:
+        print("✅ Vendor identification complete.")
     else:
-        print("\n❌ Could not generate a prediction. The model may not be trained.")
+        print("❌ Vendor identification failed.")
+        return
+
+    # --- 4. Generate and Display Reports ---
+    print("\n[Step 4] Generating and displaying reports...")
+    report_generator = ReportGenerator(final_result)
+
+    # --- Text Report ---
+    print("\n\n" + "="*20 + " TEXT REPORT " + "="*20)
+    print(report_generator.generate_text_report())
+
+    # --- JSON Report ---
+    print("\n\n" + "="*20 + " JSON REPORT " + "="*20)
+    print(report_generator.generate_json_report())
+
+    # --- CSV Report ---
+    print("\n\n" + "="*20 + " CSV REPORT " + "="*20)
+    print(report_generator.generate_csv_report())
 
     print("\n🎉 Demonstration Complete 🎉")
 
 if __name__ == "__main__":
+    # Set logging to a higher level for a cleaner demo output
+    logging.basicConfig(level=logging.WARNING)
     main()
