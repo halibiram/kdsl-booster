@@ -1,4 +1,5 @@
 import logging
+from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,17 +18,17 @@ class UniversalDSLAMDetector:
     VENDOR_SIGNATURES = {
         'huawei': {
             'snmp_oid_pattern': '1.3.6.1.4.1.2011',
-            'g_hs_pattern': b'\x02\x01\x00\x93\x11',
+            'g_hs_pattern': b'\x02\x01\x00\x93\x11\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
             'dhcp_option_125': 'HWON'
         },
         'nokia': {
             'snmp_oid_pattern': '1.3.6.1.4.1.637',
-            'g_hs_pattern': b'\x02\x01\x00\x85\x07',
+            'g_hs_pattern': b'\x02\x01\x00\x85\x07\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
             'dhcp_option_125': 'ALIN'
         },
         'zte': {
             'snmp_oid_pattern': '1.3.6.1.4.1.3902',
-            'g_hs_pattern': None, # Placeholder
+            'g_hs_pattern': b'\x02\x01\x00\x78\x22\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
             'dhcp_option_125': 'ZTE'
         }
     }
@@ -40,13 +41,14 @@ class UniversalDSLAMDetector:
             ssh_interface: An active EntwareSSHInterface instance.
         """
         self.ssh = ssh_interface
+        self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
         self.detection_methods = {
             'snmp': self._detect_via_snmp,
             'dhcp': self._detect_via_dhcp,
-            # 'g_hs': self._detect_via_g_hs, # Placeholder for future implementation
+            'g_hs': self._detect_via_g_hs,
         }
 
-    def identify_vendor(self, methods: list = ['snmp', 'dhcp']) -> str | None:
+    def identify_vendor(self, methods: list = ['snmp', 'dhcp', 'g_hs']) -> str | None:
         """
         Attempts to identify the DSLAM vendor using a list of specified methods.
 
@@ -100,4 +102,34 @@ class UniversalDSLAMDetector:
             for vendor, signatures in self.VENDOR_SIGNATURES.items():
                 if signatures['dhcp_option_125'] and signatures['dhcp_option_125'] in stdout:
                     return vendor
+        return None
+
+    def _detect_via_g_hs(self) -> str | None:
+        """
+        Identifies the vendor by analyzing the G.hs handshake.
+
+        This method orchestrates the capture and analysis of G.hs packets
+        and matches the result against a database of known vendor signatures.
+        """
+        logging.info("Attempting to identify vendor via G.hs handshake analysis.")
+
+        # In a real scenario, we might need to trigger a modem retrain to capture
+        # the handshake. For this simulation, we assume a capture is possible.
+        if not self.ghs_analyzer.capture_handshake():
+            logging.error("Failed to capture G.hs handshake. Aborting G.hs detection.")
+            return None
+
+        analysis = self.ghs_analyzer.analyze_capture()
+        if not analysis or not analysis.get('vendor_signature'):
+            logging.warning("G.hs analysis did not yield a vendor signature.")
+            return None
+
+        signature = analysis['vendor_signature']
+        logging.info(f"G.hs analysis yielded signature: {signature.hex()}")
+
+        for vendor, signatures in self.VENDOR_SIGNATURES.items():
+            if signatures['g_hs_pattern'] and signature.startswith(signatures['g_hs_pattern']):
+                return vendor
+
+        logging.warning("G.hs signature did not match any known vendor.")
         return None
