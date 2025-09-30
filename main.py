@@ -11,6 +11,7 @@ It simulates a multi-method detection scenario for a Huawei DSLAM, covering:
 - Bonding Detection
 - Frequency Capability Detection
 - Retransmission (G.inp) Detection
+- Power Spectral Density (PSD) Detection
 """
 import logging
 import json
@@ -22,16 +23,14 @@ from src.vectoring_analyzer import VectoringAnalyzer
 from src.bonding_analyzer import BondingAnalyzer
 from src.frequency_analyzer import FrequencyAnalyzer
 from src.retransmission_analyzer import RetransmissionAnalyzer
+from src.psd_analyzer import PSDAnalyzer
 
 # --- Mock Data Configuration ---
 HUAWEI_GHS_ANALYSIS = {
     "vendor_id": "HWTC", "vsi": b"MA5608T", "cl_message_payload": b"...",
     "handshake_duration": 195.0,
-    "vdsl2_profiles_bitmap": 81,
-    "g_vector_bitmap": 1,
-    "bonding_bitmap": 3,
-    "band_plan_id": 32,
-    "g_inp_bitmap": 1  # G.inp supported
+    "vdsl2_profiles_bitmap": 81, "g_vector_bitmap": 1, "bonding_bitmap": 3,
+    "band_plan_id": 32, "g_inp_bitmap": 1, "psd_mask_id": 1
 }
 HUAWEI_SNMP_SYS_OID = "1.3.6.1.4.1.2011.2.82.8"
 HUAWEI_VDSL_PROFILES_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.20"
@@ -43,7 +42,9 @@ HUAWEI_BONDING_STATUS_RESPONSE = "INTEGER: 1"
 HUAWEI_MAX_FREQUENCY_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.15"
 HUAWEI_MAX_FREQUENCY_RESPONSE = "INTEGER: 17664"
 HUAWEI_RETRANSMISSION_STATUS_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.25"
-HUAWEI_RETRANSMISSION_STATUS_RESPONSE = "INTEGER: 1" # Active
+HUAWEI_RETRANSMISSION_STATUS_RESPONSE = "INTEGER: 1"
+HUAWEI_PSD_MASK_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.18"
+HUAWEI_PSD_MASK_RESPONSE = 'STRING: "ETSI Annex A (ADLU-32)"'
 HUAWEI_DNS_HOSTNAME = "dslam-ma5608t-london.huawei.isp.com"
 
 
@@ -54,6 +55,7 @@ def mock_snmp_executor(command: str) -> tuple[str, str]:
     if HUAWEI_BONDING_STATUS_OID in command: return HUAWEI_BONDING_STATUS_RESPONSE, ""
     if HUAWEI_MAX_FREQUENCY_OID in command: return HUAWEI_MAX_FREQUENCY_RESPONSE, ""
     if HUAWEI_RETRANSMISSION_STATUS_OID in command: return HUAWEI_RETRANSMISSION_STATUS_RESPONSE, ""
+    if HUAWEI_PSD_MASK_OID in command: return HUAWEI_PSD_MASK_RESPONSE, ""
     if "1.3.6.1.2.1.1.2.0" in command: return HUAWEI_SNMP_SYS_OID, ""
     return "", "Timeout"
 
@@ -78,6 +80,7 @@ def main():
     bonding_analyzer = BondingAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     frequency_analyzer = FrequencyAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     retransmission_analyzer = RetransmissionAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
+    psd_analyzer = PSDAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     print("Components initialized successfully.")
 
     # --- 2. Mocking Detection Method Results ---
@@ -151,8 +154,18 @@ def main():
     else:
         print("❌ G.inp detection failed.")
 
-    # --- 9. Generate and Display Reports ---
-    print("\n[Step 9] Generating and displaying reports...")
+    # --- 9. Run PSD Detection ---
+    print("\n[Step 9] Running multi-method PSD detection...")
+    psd_result = psd_analyzer.detect_all_psd_capabilities(vendor=vendor)
+    if psd_result:
+        mask = psd_result.get('psd_mask_class', 'N/A')
+        print(f"✅ PSD detection complete. Mask: {mask}")
+        vendor_result['capability_analysis']['psd'] = psd_result
+    else:
+        print("❌ PSD detection failed.")
+
+    # --- 10. Generate and Display Reports ---
+    print("\n[Step 10] Generating and displaying reports...")
     report_generator = ReportGenerator(vendor_result)
 
     print("\n\n" + "="*20 + " TEXT REPORT " + "="*20)

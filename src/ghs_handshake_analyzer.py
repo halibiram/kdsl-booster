@@ -98,6 +98,7 @@ class GHSHandshakeAnalyzer:
                 "bonding_bitmap": cl_message.get("bonding_bitmap"),
                 "band_plan_id": cl_message.get("band_plan_id"),
                 "g_inp_bitmap": cl_message.get("g_inp_bitmap"),
+                "psd_mask_id": cl_message.get("psd_mask_id"),
                 "full_analysis": cl_message
             })
         else:
@@ -118,7 +119,7 @@ class GHSHandshakeAnalyzer:
         parsed_data = {
             "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
             "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None,
-            "band_plan_id": None, "g_inp_bitmap": None
+            "band_plan_id": None, "g_inp_bitmap": None, "psd_mask_id": None
         }
         try:
             i = 1  # Start after message type
@@ -142,6 +143,15 @@ class GHSHandshakeAnalyzer:
                     if param_len >= 1 and i + 2 + param_len <= len(payload):
                         # The band plan is usually the first byte of the value
                         parsed_data["band_plan_id"] = payload[i + 2]
+                    i += 1 + param_len
+                    continue
+
+                # VDSL2 PSD Mask (ID 0x85)
+                if param_id == 0x85 and i + 2 < len(payload):
+                    param_len = payload[i + 1]
+                    if param_len >= 1 and i + 2 + param_len <= len(payload):
+                        # The PSD mask ID is usually the first byte of the value
+                        parsed_data["psd_mask_id"] = payload[i + 2]
                     i += 1 + param_len
                     continue
 
