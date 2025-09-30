@@ -94,6 +94,7 @@ class GHSHandshakeAnalyzer:
                 "vendor_id": cl_message.get("vendor_id"),
                 "vsi": cl_message.get("vsi"),
                 "vdsl2_profiles_bitmap": cl_message.get("vdsl2_profiles_bitmap"),
+                "g_vector_bitmap": cl_message.get("g_vector_bitmap"),
                 "full_analysis": cl_message
             })
         else:
@@ -111,77 +112,56 @@ class GHSHandshakeAnalyzer:
         msg_type = msg_type_map.get(payload[0])
         if not msg_type: return None
 
-        parsed_data = {"type": msg_type, "payload": payload, "vendor_id": None, "vsi": None, "vdsl2_profiles_bitmap": None}
+        parsed_data = {
+            "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
+            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None
+        }
         try:
-            # --- Standard Information Field (SIF) Parsing for VDSL2 Profiles ---
-            # The VDSL2 profiles are in a parameter identified by a specific ID.
-            # ITU-T G.994.1 (Annex A) defines this. The parameter set for VDSL2 is
-            # {itu-t(0) recommendation(0) g(7) 993(993) 2(2) annexB(1)}
-            # This is encoded in a complex way. A common simplified representation is
-            # to look for a specific marker. Based on analysis of real-world captures,
-            # the VDSL2 profile bitmap is often found in a standard parameter field.
-            # We will search for a common identifier for the VDSL2 parameter set.
-            # The identifier for the parameter containing the VDSL2 profiles bitmap is
-            # often found after a sequence like `b'\x04\x07\x00\x00\x00\x00\x00\x00'`.
-            # A more direct approach is to parse the SIF parameters.
-            i = 1 # Start after message type
+            i = 1  # Start after message type
             while i < len(payload):
-                # Look for SIF parameter for VDSL2 capabilities
-                # According to G.994.1 Table 11-28, this is inside a standard parameter.
-                # The parameter set is identified by a unique sequence.
-                # Let's search for the VDSL2 parameter which often has a known structure.
-                # A common pattern for VDSL2 is a parameter starting with a specific byte.
-                # Based on sample pcaps, the VDSL2 profiles are in a parameter
-                # that can be identified. Let's find it by a known pattern.
-                # The bitmap is usually 2 bytes.
-                # A robust way is to parse the SIF properly.
-                # SIF parameter format: [ID (1 byte)] [Length (1 byte)] [Data (variable)]
-                # The ID for the VDSL2 Annex B parameters is what we need.
-                # A common identifier for the VDSL2 parameter is `b'\x83'`.
-                # This is a simplification. The full OID is complex.
-                # Let's search for the VDSL2 Profiles parameter directly.
-                # The parameter is identified by `b'\x05\x02'` followed by the 2-byte bitmap.
-                # This is not standard.
+                param_id = payload[i]
 
-                # Let's use a more reliable marker from real captures.
-                # The VDSL2 parameter set is often identified by a specific byte sequence.
-                # We'll look for the VDSL2 profile bitmap parameter, which is typically
-                # 2 bytes long and follows a specific identifier.
-                # Based on G.994.1, the parameter set for VDSL2 is complex to parse.
-                # Let's find the VDSL2 profiles bitmap which is defined in Table 11-28.
-                # This bitmap is inside a parameter.
-                # We will look for the parameter that contains this bitmap.
-                # The standard says the parameter is identified by a specific sequence.
-                # The sequence for VDSL2 is complex. Let's look for a sub-parameter.
-                # The VDSL2 profiles bitmap is often found in a parameter with ID 0x83.
-                if payload[i] == 0x83 and i + 2 < len(payload):
-                    # This parameter is often: ID (0x83), Length (e.g., 0x02), Value (bitmap)
-                    param_len = payload[i+1]
+                # --- SIF Parameter Parsing ---
+                # VDSL2 Profiles (ID 0x83)
+                if param_id == 0x83 and i + 2 < len(payload):
+                    param_len = payload[i + 1]
                     if param_len >= 2 and i + 2 + param_len <= len(payload):
-                        # Assuming the first two bytes of the value are the bitmap
-                        bitmap_val = int.from_bytes(payload[i+2:i+4], 'big')
+                        bitmap_val = int.from_bytes(payload[i + 2:i + 4], 'big')
                         parsed_data["vdsl2_profiles_bitmap"] = bitmap_val
-                        # We found it, no need to search further in SIF
-                        break
+                    i += 1 + param_len
+                    continue
 
-                # --- Non-Standard Information Field (NSIF) Parsing ---
-                if payload[i] == 0x91: # NSIF Marker
+                # G.vector/G.993.5 Support (ID 0x86)
+                if param_id == 0x86 and i + 2 < len(payload):
+                    param_len = payload[i + 1]
+                    if param_len >= 1 and i + 2 + param_len <= len(payload):
+                        # The bitmap is typically the first byte of the parameter value
+                        bitmap_val = payload[i + 2]
+                        parsed_data["g_vector_bitmap"] = bitmap_val
+                    i += 1 + param_len
+                    continue
+
+                # --- NSIF Parameter Parsing ---
+                if param_id == 0x91:  # NSIF Marker
                     if i + 1 < len(payload):
                         param_len = payload[i + 1]
                         if i + 2 + param_len <= len(payload):
-                            nsif_data = payload[i + 2 : i + 2 + param_len]
+                            nsif_data = payload[i + 2: i + 2 + param_len]
                             if len(nsif_data) >= 6:
                                 parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
                                 parsed_data["vsi"] = nsif_data[6:]
-                            # NSIF is usually last, but we'll continue just in case
-                        i += 1 + param_len # Move to next parameter
+                        i += 1 + param_len
                     else:
-                        break # Malformed
-                else:
-                    # Move to the next potential parameter
-                    # This simple forward step is not a full SIF parser,
-                    # but it's effective for finding our target parameters.
-                    i += 1
+                        break  # Malformed NSIF
+                    continue
+
+                # If we don't recognize the parameter, we need to skip it.
+                # A simple SIF parser assumes [ID][Length][Data].
+                # If we don't have a proper length, we can't reliably skip.
+                # For this simplified parser, we'll just move to the next byte
+                # if it's not a parameter we're actively looking for.
+                i += 1
+
         except Exception as e:
             logging.warning(f"Unexpected error while parsing G.hs message: {e}")
 
