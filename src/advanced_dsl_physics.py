@@ -1,8 +1,7 @@
 import numpy as np
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("dsl_bypass")
 
 # --- VDSL2 Profile and Physics Constants ---
 # Based on ITU-T G.993.2 specifications and common physics models.
@@ -40,7 +39,7 @@ class AdvancedDSLPhysics:
         self.profile_data = VDSL2_PROFILES[profile]
         self.tone_spacing = self.profile_data['tone_spacing_hz']
         self.tones = self._generate_tones()
-        logging.info(f"Initialized physics model for VDSL2 profile {profile} with {len(self.tones)} active tones.")
+        logger.info(f"Initialized physics model for VDSL2 profile {profile} with {len(self.tones)} active tones.")
 
     def _generate_tones(self) -> np.ndarray:
         """Generates an array of frequencies for each active tone in the profile."""

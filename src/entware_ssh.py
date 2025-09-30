@@ -3,11 +3,7 @@ import threading
 import time
 import logging
 
-# Configure logging for better diagnostics
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s'
-)
+logger = logging.getLogger("dsl_bypass")
 
 class EntwareSSHInterface:
     """
@@ -47,7 +43,7 @@ class EntwareSSHInterface:
         """
         with self._lock:
             if self._is_connected:
-                logging.info("Already connected.")
+                logger.info("Already connected.")
                 return
 
             try:
@@ -60,7 +56,7 @@ class EntwareSSHInterface:
                     timeout=self.connect_timeout
                 )
                 self._is_connected = True
-                logging.info("SSH connection established successfully.")
+                logger.info("SSH connection established successfully.")
 
                 self._stop_event.clear()
                 self._connection_thread = threading.Thread(
@@ -70,7 +66,7 @@ class EntwareSSHInterface:
                 )
                 self._connection_thread.start()
             except Exception as e:
-                logging.error(f"Failed to establish initial SSH connection: {e}")
+                logger.error(f"Failed to establish initial SSH connection: {e}")
                 self._is_connected = False
                 if self._ssh_client:
                     self._ssh_client.close()
@@ -81,10 +77,10 @@ class EntwareSSHInterface:
         """
         Stops the connection manager and closes the SSH connection.
         """
-        logging.info(f"Disconnecting from {self.host}...")
+        logger.info(f"Disconnecting from {self.host}...")
         with self._lock:
             if not self._connection_thread:
-                logging.info("Not connected.")
+                logger.info("Not connected.")
                 return
 
             self._stop_event.set()
@@ -99,7 +95,7 @@ class EntwareSSHInterface:
             self._ssh_client = None
             self._is_connected = False
             self._connection_thread = None
-            logging.info("SSH connection closed.")
+            logger.info("SSH connection closed.")
 
     def execute_command(self, command, timeout=15):
         """
@@ -109,7 +105,7 @@ class EntwareSSHInterface:
         with self._lock:
             self.last_used = time.time()
             if not self._is_connected or self._is_reconnecting:
-                logging.warning("Cannot execute command: SSH client is not connected or reconnecting.")
+                logger.warning("Cannot execute command: SSH client is not connected or reconnecting.")
                 return None, "Not connected"
 
             try:
@@ -128,15 +124,15 @@ class EntwareSSHInterface:
 
                 exit_status = channel.recv_exit_status()
                 if exit_status != 0:
-                    logging.warning(f"Command '{command}' exited with status {exit_status}. Stderr: {stderr_data.strip()}")
+                    logger.warning(f"Command '{command}' exited with status {exit_status}. Stderr: {stderr_data.strip()}")
 
                 return stdout_data, stderr_data
 
             except TimeoutError as e:
-                logging.error(f"Timeout executing command '{command}': {e}")
+                logger.error(f"Timeout executing command '{command}': {e}")
                 return None, str(e)
             except Exception as e:
-                logging.error(f"Failed to execute command '{command}': {e}")
+                logger.error(f"Failed to execute command '{command}': {e}")
                 # After a command failure, trigger a connection check
                 with self._lock:
                     self._is_connected = False
@@ -164,7 +160,7 @@ class EntwareSSHInterface:
                     transport = self._ssh_client.get_transport()
                     transport.send_ignore()
         except Exception as e:
-            logging.warning(f"Keepalive failed: {e}")
+            logger.warning(f"Keepalive failed: {e}")
 
     def _manage_connection(self):
         """
@@ -194,7 +190,7 @@ class EntwareSSHInterface:
 
     def _attempt_reconnection(self):
         """Separate reconnection logic for clarity"""
-        logging.info("Connection lost. Attempting to reconnect...")
+        logger.info("Connection lost. Attempting to reconnect...")
         reconnection_delay = 5
         max_reconnection_delay = 300
 
@@ -219,10 +215,10 @@ class EntwareSSHInterface:
                 with self._lock:
                     self._is_connected = True
                     self._is_reconnecting = False
-                logging.info("Reconnection successful.")
+                logger.info("Reconnection successful.")
                 break  # Exit the reconnection loop
             except Exception as e:
-                logging.error(f"Reconnection failed: {e}. Retrying in {reconnection_delay}s...")
+                logger.error(f"Reconnection failed: {e}. Retrying in {reconnection_delay}s...")
                 self._stop_event.wait(reconnection_delay)
                 reconnection_delay = min(reconnection_delay * 2, max_reconnection_delay)
 
@@ -250,7 +246,7 @@ class EntwareSSHConnectionPool:
             if self._initialized:
                 return
 
-            logging.info("Initializing SSH connection pool...")
+            logger.info("Initializing SSH connection pool...")
             self.host = host
             self.username = username
             self.password = password
@@ -266,7 +262,7 @@ class EntwareSSHConnectionPool:
         """
         with self._connection_lock:
             if self._connection is None or not self._connection.is_connected():
-                logging.info("Connection not available or disconnected. Establishing new connection.")
+                logger.info("Connection not available or disconnected. Establishing new connection.")
                 try:
                     self._connection = EntwareSSHInterface(
                         host=self.host,
@@ -276,7 +272,7 @@ class EntwareSSHConnectionPool:
                     )
                     self._connection.connect()
                 except Exception as e:
-                    logging.error(f"Failed to create connection in pool: {e}")
+                    logger.error(f"Failed to create connection in pool: {e}")
                     self._connection = None # Ensure connection is None on failure
                     raise
 
@@ -290,4 +286,4 @@ class EntwareSSHConnectionPool:
             if self._connection:
                 self._connection.disconnect()
                 self._connection = None
-            logging.info("Connection pool has been shut down.")
+            logger.info("Connection pool has been shut down.")

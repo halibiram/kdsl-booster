@@ -1,8 +1,7 @@
 import logging
 from src.dslam_detector import UniversalDSLAMDetector
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("dsl_bypass")
 
 class TurkishISPDSLAMSupport:
     """
@@ -72,18 +71,18 @@ class TurkishISPDSLAMSupport:
             A dictionary containing the recommended vendor and exploitation methods,
             or None if a strategy cannot be determined.
         """
-        logging.info(f"Selecting exploitation strategy for {target_isp}")
+        logger.info(f"Selecting exploitation strategy for {target_isp}")
 
         isp_profile = self.get_isp_profile(target_isp)
         if not isp_profile:
-            logging.error(f"No profile found for ISP: {target_isp}")
+            logger.error(f"No profile found for ISP: {target_isp}")
             return None
 
         # Use the detector to find the actual vendor on the line
         detected_vendor = self.detector.identify_vendor()
 
         if not detected_vendor:
-            logging.warning("Could not detect DSLAM vendor. Cannot confirm strategy.")
+            logger.warning("Could not detect DSLAM vendor. Cannot confirm strategy.")
             # We can still return the primary known vendor as a best guess.
             return {
                 "vendor": isp_profile['primary_vendor'],
@@ -92,14 +91,14 @@ class TurkishISPDSLAMSupport:
             }
 
         if detected_vendor == isp_profile['primary_vendor']:
-            logging.info(f"Detected vendor '{detected_vendor}' matches primary vendor for {target_isp}.")
+            logger.info(f"Detected vendor '{detected_vendor}' matches primary vendor for {target_isp}.")
             return {
                 "vendor": detected_vendor,
                 "recommended_methods": isp_profile['exploitation_methods'],
                 "confidence": "high"
             }
         else:
-            logging.warning(f"Detected vendor '{detected_vendor}' does not match primary vendor "
+            logger.warning(f"Detected vendor '{detected_vendor}' does not match primary vendor "
                             f"'{isp_profile['primary_vendor']}' for {target_isp}. A custom strategy may be needed.")
             # Attempt to find a profile for the detected vendor anyway
             for isp, profile_data in self.TURKISH_ISP_DSLAMS.items():

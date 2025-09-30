@@ -4,16 +4,20 @@ from typing import Dict, Optional
 import subprocess
 import json
 import numpy as np
+import logging
 
 from src.spoofing import KernelDSLManipulator
+
+logger = logging.getLogger("dsl_bypass")
 
 
 class RealWorldPerformanceMeasurement:
     """
     Real-world performance measurement integration
     """
-    def __init__(self, ssh_interface):
+    def __init__(self, ssh_interface, manipulator):
         self.ssh = ssh_interface
+        self.manipulator = manipulator
         self.measurement_methods = [
             self._measure_with_iperf3,
             self._measure_with_speedtest_cli,
@@ -35,7 +39,7 @@ class RealWorldPerformanceMeasurement:
             Dictionary with measurement results
         """
         if not all(manipulation_result.values()):
-            print("Manipulation failed, skipping performance measurement")
+            logger.warning("Manipulation failed, skipping performance measurement")
             return {
                 "measured_speed_mbps": 0.0,
                 "measurement_method": "none",
@@ -43,7 +47,7 @@ class RealWorldPerformanceMeasurement:
             }
 
         # Wait for parameters to stabilize
-        print("Waiting 10 seconds for DSL parameters to stabilize...")
+        logger.info("Waiting 10 seconds for DSL parameters to stabilize...")
         time.sleep(10)
 
         # Try measurement methods in order
@@ -54,7 +58,7 @@ class RealWorldPerformanceMeasurement:
                     if result and result["measured_speed_mbps"] > 0:
                         return result
                 except Exception as e:
-                    print(f"Measurement method failed: {e}")
+                    logger.error(f"Measurement method failed: {e}")
                     continue
 
             # Fallback to simulation if all methods fail
@@ -74,12 +78,12 @@ class RealWorldPerformanceMeasurement:
         Measure bandwidth using iperf3
         Requires iperf3 server accessible on the internet
         """
-        print("Measuring bandwidth with iperf3...")
+        logger.info("Measuring bandwidth with iperf3...")
 
         # Check if iperf3 is installed
         stdout, stderr = self.ssh.execute_command("which iperf3")
         if not stdout or stderr:
-            print("iperf3 not found, trying to install...")
+            logger.info("iperf3 not found, trying to install...")
             self.ssh.execute_command("opkg update && opkg install iperf3")
 
         # Run iperf3 test (requires external iperf3 server)
@@ -108,7 +112,7 @@ class RealWorldPerformanceMeasurement:
                         "raw_data": result
                     }
                 except (json.JSONDecodeError, KeyError) as e:
-                    print(f"Failed to parse iperf3 result from {server}: {e}")
+                    logger.warning(f"Failed to parse iperf3 result from {server}: {e}")
                     continue
 
         return None
@@ -117,12 +121,12 @@ class RealWorldPerformanceMeasurement:
         """
         Measure bandwidth using speedtest-cli
         """
-        print("Measuring bandwidth with speedtest-cli...")
+        logger.info("Measuring bandwidth with speedtest-cli...")
 
         # Check installation
         stdout, _ = self.ssh.execute_command("which speedtest-cli")
         if not stdout:
-            print("speedtest-cli not found, installing...")
+            logger.info("speedtest-cli not found, installing...")
             self.ssh.execute_command("opkg update && opkg install python3-pip")
             self.ssh.execute_command("pip3 install speedtest-cli")
 
@@ -146,7 +150,7 @@ class RealWorldPerformanceMeasurement:
                     "raw_data": result
                 }
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Failed to parse speedtest result: {e}")
+                logger.warning(f"Failed to parse speedtest result: {e}")
 
         return None
 
@@ -154,7 +158,7 @@ class RealWorldPerformanceMeasurement:
         """
         Measure from DSL driver statistics (most reliable for DSL)
         """
-        print("Reading DSL statistics from driver...")
+        logger.info("Reading DSL statistics from driver...")
 
         # Try multiple DSL stats locations
         stats_paths = [
@@ -206,7 +210,7 @@ class RealWorldPerformanceMeasurement:
         """
         Fallback simulation with realistic variability
         """
-        print("Using simulation for performance measurement...")
+        logger.info("Using simulation for performance measurement...")
 
         # Realistic simulation with variability
         # Base effectiveness: 85-95%
@@ -244,7 +248,7 @@ class ExperimentRunner:
     def __init__(self, manipulator, ssh_interface):
         self.manipulator = manipulator
         self.ssh = ssh_interface
-        self.performance_measurer = RealWorldPerformanceMeasurement(ssh_interface)
+        self.performance_measurer = RealWorldPerformanceMeasurement(ssh_interface, manipulator)
         self.results = []
 
     def parameter_sweep(self, rate_range, distance_range,
@@ -252,16 +256,16 @@ class ExperimentRunner:
         """
         Enhanced parameter sweep with real measurements
         """
-        print(f"Starting parameter sweep: {len(rate_range)} rates × {len(distance_range)} distances")
+        logger.info(f"Starting parameter sweep: {len(rate_range)} rates × {len(distance_range)} distances")
         self.results = []
 
         for rate_idx, rate in enumerate(rate_range):
             for dist_idx, distance in enumerate(distance_range):
-                print(f"\n{'='*60}")
-                print(f"Experiment {rate_idx * len(distance_range) + dist_idx + 1}/"
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Experiment {rate_idx * len(distance_range) + dist_idx + 1}/"
                       f"{len(rate_range) * len(distance_range)}")
-                print(f"Target: {rate} Mbps at {distance}m")
-                print(f"{'='*60}")
+                logger.info(f"Target: {rate} Mbps at {distance}m")
+                logger.info(f"{'='*60}")
 
                 # Apply manipulation
                 manipulation_result = self.manipulator.set_target_profile(
@@ -293,19 +297,19 @@ class ExperimentRunner:
 
                 self.results.append(experiment_result)
 
-                print(f"Result: {measurement['measured_speed_mbps']:.2f} Mbps "
+                logger.info(f"Result: {measurement['measured_speed_mbps']:.2f} Mbps "
                       f"({experiment_result['effectiveness_ratio']*100:.1f}% of target)")
 
                 # Safety: Revert if speed is dangerously low
                 if measurement["measured_speed_mbps"] < 10:
-                    print("WARNING: Speed critically low, reverting changes...")
+                    logger.warning("WARNING: Speed critically low, reverting changes...")
                     self._revert_to_baseline()
 
                 # Cooldown between experiments
                 time.sleep(5)
 
-        print(f"\n{'='*60}")
-        print(f"Parameter sweep complete. {len(self.results)} experiments conducted.")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Parameter sweep complete. {len(self.results)} experiments conducted.")
         self._print_summary()
 
     def _revert_to_baseline(self):
@@ -316,7 +320,7 @@ class ExperimentRunner:
             target_rate_mbps=30,  # Safe baseline
             target_distance_m=300
         )
-        print("Reverted to baseline parameters")
+        logger.info("Reverted to baseline parameters")
 
     def _print_summary(self):
         """
@@ -329,13 +333,13 @@ class ExperimentRunner:
         targets = [r["target_rate_mbps"] for r in self.results]
         effectiveness = [r["effectiveness_ratio"] for r in self.results]
 
-        print("\n" + "="*60)
-        print("EXPERIMENT SUMMARY")
-        print("="*60)
-        print(f"Total experiments: {len(self.results)}")
-        print(f"Average measured speed: {np.mean(speeds):.2f} Mbps")
-        print(f"Average target speed: {np.mean(targets):.2f} Mbps")
-        print(f"Average effectiveness: {np.mean(effectiveness)*100:.1f}%")
-        print(f"Best result: {max(speeds):.2f} Mbps (target: {targets[speeds.index(max(speeds))]:.0f} Mbps)")
-        print(f"Worst result: {min(speeds):.2f} Mbps (target: {targets[speeds.index(min(speeds))]:.0f} Mbps)")
-        print("="*60)
+        logger.info("\n" + "="*60)
+        logger.info("EXPERIMENT SUMMARY")
+        logger.info("="*60)
+        logger.info(f"Total experiments: {len(self.results)}")
+        logger.info(f"Average measured speed: {np.mean(speeds):.2f} Mbps")
+        logger.info(f"Average target speed: {np.mean(targets):.2f} Mbps")
+        logger.info(f"Average effectiveness: {np.mean(effectiveness)*100:.1f}%")
+        logger.info(f"Best result: {max(speeds):.2f} Mbps (target: {targets[speeds.index(max(speeds))]:.0f} Mbps)")
+        logger.info(f"Worst result: {min(speeds):.2f} Mbps (target: {targets[speeds.index(min(speeds))]:.0f} Mbps)")
+        logger.info("="*60)

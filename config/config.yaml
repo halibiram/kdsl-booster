@@ -1,0 +1,52 @@
+# DSL Bypass Ultra Configuration
+
+# Device Settings
+device:
+  model: "KN-2112"  # Keenetic Skipper DSL
+  host: "192.168.1.1"
+  ssh_port: 22
+  username: "admin"
+  password: ""  # Leave empty, will prompt
+
+# DSL Parameters
+dsl:
+  baseline:
+    rate_mbps: 30
+    snr_db: 25
+    attenuation_db: 18
+    distance_m: 300
+
+  safety_limits:
+    max_snr_db: 65
+    min_snr_db: 10
+    max_attenuation_db: 45
+    min_attenuation_db: 1
+    max_target_rate_mbps: 300
+
+# Experiment Settings
+experiment:
+  measurement_method: "auto"  # auto, iperf3, speedtest, dsl_stats, simulation
+  stabilization_time_sec: 10
+  cooldown_time_sec: 5
+  enable_auto_rollback: true
+  rollback_threshold_mbps: 10
+
+# AI Optimizer Settings
+ai:
+  enabled: true
+  regularization_alpha: 1.0
+  validation_split: 0.2
+  min_training_samples: 5
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "dsl_bypass.log"
+  console_output: true
+
+# Safety
+safety:
+  require_confirmation: true
+  backup_original_params: true
+  max_experiments_per_session: 20
+  emergency_stop_enabled: true

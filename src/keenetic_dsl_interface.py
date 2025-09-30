@@ -2,8 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from src.entware_ssh import EntwareSSHInterface
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("dsl_bypass")
 
 class DslHalBase(ABC):
     """
@@ -49,7 +48,7 @@ class BroadcomDslHal(DslHalBase):
     These chipsets are often controlled via proprietary command-line tools.
     """
     def discover_driver(self) -> bool:
-        logging.info("Searching for Broadcom DSL control utility (e.g., xdslctl)...")
+        logger.info("Searching for Broadcom DSL control utility (e.g., xdslctl)...")
 
         possible_tools = ["xdslctl", "bcm_xdslctl", "adslctl"]
 
@@ -59,23 +58,23 @@ class BroadcomDslHal(DslHalBase):
 
             if stdout and stdout.strip():
                 self.driver_path = stdout.strip()
-                logging.info(f"Found Broadcom DSL control utility at: {self.driver_path}")
+                logger.info(f"Found Broadcom DSL control utility at: {self.driver_path}")
                 return True
 
-        logging.error("Could not find a valid Broadcom DSL control utility.")
+        logger.error("Could not find a valid Broadcom DSL control utility.")
         self.driver_path = None
         return False
 
     def get_snr_margin(self) -> float | None:
         if not self.driver_path:
-            logging.error("Broadcom driver command not found.")
+            logger.error("Broadcom driver command not found.")
             return None
 
         command = f"{self.driver_path} info --show"
         stdout, stderr = self.ssh.execute_command(command)
 
         if stderr or not stdout:
-            logging.error(f"Failed to get Broadcom DSL info: {stderr}")
+            logger.error(f"Failed to get Broadcom DSL info: {stderr}")
             return None
 
         for line in stdout.splitlines():
@@ -83,20 +82,20 @@ class BroadcomDslHal(DslHalBase):
                 try:
                     return float(line.split(':')[1].strip().split(' ')[0])
                 except (IndexError, ValueError) as e:
-                    logging.warning(f"Could not parse SNR margin from line: '{line}'. Error: {e}")
+                    logger.warning(f"Could not parse SNR margin from line: '{line}'. Error: {e}")
                     continue
         return None
 
     def set_snr_margin(self, snr_margin: int) -> bool:
         if not self.driver_path:
-            logging.error("Broadcom driver command not found.")
+            logger.error("Broadcom driver command not found.")
             return False
 
         command = f"{self.driver_path} configure --snr {snr_margin}"
         _, stderr = self.ssh.execute_command(command)
 
         if stderr:
-            logging.error(f"Failed to set Broadcom SNR margin: {stderr}")
+            logger.error(f"Failed to set Broadcom SNR margin: {stderr}")
             return False
         return True
 
@@ -106,18 +105,18 @@ class LantiqDslHal(DslHalBase):
     These chipsets often expose their state via the /sys filesystem.
     """
     def discover_driver(self) -> bool:
-        logging.info("Searching for Lantiq DSL driver path in /sys/class/dsl...")
+        logger.info("Searching for Lantiq DSL driver path in /sys/class/dsl...")
 
         command = "find /sys/class/dsl/dsl* -name 'adsl_version' -print -quit | sed 's|/adsl_version$||'"
         stdout, stderr = self.ssh.execute_command(command, timeout=5)
 
         if stderr or not stdout.strip():
-            logging.error(f"Could not find a valid Lantiq DSL driver path. Error: {stderr or 'No output'}")
+            logger.error(f"Could not find a valid Lantiq DSL driver path. Error: {stderr or 'No output'}")
             self.driver_path = None
             return False
 
         self.driver_path = stdout.strip()
-        logging.info(f"Found Lantiq DSL driver at: {self.driver_path}")
+        logger.info(f"Found Lantiq DSL driver at: {self.driver_path}")
         return True
 
     def get_snr_margin(self) -> float | None:
@@ -128,7 +127,7 @@ class LantiqDslHal(DslHalBase):
         stdout, stderr = self.ssh.execute_command(command)
 
         if stderr or not stdout:
-            logging.error(f"Failed to read Lantiq SNR margin: {stderr}")
+            logger.error(f"Failed to read Lantiq SNR margin: {stderr}")
             return None
 
         try:
@@ -145,7 +144,7 @@ class LantiqDslHal(DslHalBase):
         _, stderr = self.ssh.execute_command(command)
 
         if stderr:
-            logging.error(f"Failed to set Lantiq SNR margin: {stderr}")
+            logger.error(f"Failed to set Lantiq SNR margin: {stderr}")
             return False
         return True
 
@@ -169,24 +168,24 @@ class KeeneticDSLInterface:
         if self._hal_class:
             return self._hal_class
 
-        logging.info("Detecting Keenetic hardware model to determine HAL class...")
+        logger.info("Detecting Keenetic hardware model to determine HAL class...")
         command = "cat /proc/device-tree/model"
         stdout, stderr = self.ssh.execute_command(command)
 
         if stderr or not stdout:
-            logging.error(f"Failed to detect hardware model: {stderr or 'No output'}")
+            logger.error(f"Failed to detect hardware model: {stderr or 'No output'}")
             return None
 
         model_string = stdout.strip()
-        logging.info(f"Detected model string: '{model_string}'")
+        logger.info(f"Detected model string: '{model_string}'")
 
         for model_key, hal_class in CHIPSET_FAMILY_MAP.items():
             if model_key in model_string:
-                logging.info(f"Matched model {model_key}, using HAL: {hal_class.__name__}")
+                logger.info(f"Matched model {model_key}, using HAL: {hal_class.__name__}")
                 self._hal_class = hal_class
                 return self._hal_class
 
-        logging.error(f"No HAL class found for model '{model_string}'")
+        logger.error(f"No HAL class found for model '{model_string}'")
         return None
 
     def get_hal(self) -> DslHalBase | None:
@@ -203,5 +202,5 @@ class KeeneticDSLInterface:
             self._hal_instance = hal_instance
             return self._hal_instance
         else:
-            logging.error(f"Failed to discover driver for HAL {hal_class.__name__}")
+            logger.error(f"Failed to discover driver for HAL {hal_class.__name__}")
             return None

@@ -15,14 +15,28 @@ import numpy as np
 from src.spoofing import KernelDSLManipulator
 from src.experimentation import ExperimentRunner
 from src.ai_optimizer import AIOptimizer
+from src.logging_config import setup_logging
+from src.config_loader import ConfigLoader
 
 def main():
-    print("🚀 Starting DSL Bypass Ultra Demonstration 🚀")
+    config = ConfigLoader()
+    logger = setup_logging(log_level=config.get('logging.level', 'INFO'), log_file=config.get('logging.file', 'dsl_bypass.log'))
+    logger.info("🚀 Starting DSL Bypass Ultra Demonstration 🚀")
 
     # --- 1. Setup and Initialization ---
     # In a real scenario, this would be a live SSH connection.
     # For this demo, we mock the interface to allow the script to run.
-    print("\n[Step 1] Initializing components...")
+    logger.info("[Step 1] Initializing components...")
+
+    # Example of real SSH connection using config:
+    # from src.entware_ssh import EntwareSSHConnectionPool
+    # ssh_pool = EntwareSSHConnectionPool(
+    #     host=config.get('device.host'),
+    #     username=config.get('device.username'),
+    #     password=config.get('device.password')
+    # )
+    # ssh_interface = ssh_pool.get_connection()
+
     mock_ssh_interface = MagicMock()
 
     def mock_execute_command(command, **kwargs):
@@ -41,37 +55,45 @@ def main():
     # Initialize the core components
     manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface)
     experiment_runner = ExperimentRunner(manipulator=manipulator, ssh_interface=mock_ssh_interface)
-    ai_optimizer = AIOptimizer()
-    print("Components initialized successfully.")
+    ai_optimizer = AIOptimizer(regularization_alpha=config.get('ai.regularization_alpha', 1.0))
+    logger.info("Components initialized successfully.")
 
     # --- 2. Automated Data Collection ---
-    print("\n[Step 2] Running automated parameter sweep to collect data...")
+    logger.info("[Step 2] Running automated parameter sweep to collect data...")
 
     # To keep the demo fast, we'll test a small but effective range of parameters.
     rate_range = np.arange(40, 151, 10)  # 40, 50, ..., 150 Mbps
     distance_range = np.arange(20, 301, 40) # 20, 60, ..., 300 m
 
-    experiment_runner.parameter_sweep(rate_range, distance_range)
-    print(f"Data collection complete. {len(experiment_runner.results)} experiments run.")
+    experiment_runner.parameter_sweep(
+        rate_range,
+        distance_range,
+        measurement_method=config.get('experiment.measurement_method', 'auto')
+    )
+    logger.info(f"Data collection complete. {len(experiment_runner.results)} experiments run.")
 
     # --- 3. AI Model Training ---
-    print("\n[Step 3] Training AI model on collected data...")
-    ai_optimizer.train(experiment_runner.results)
+    logger.info("[Step 3] Training AI model on collected data...")
+    ai_optimizer.train(experiment_runner.results, validation_split=config.get('ai.validation_split', 0.2))
 
     # --- 4. AI-Powered Prediction ---
-    print("\n[Step 4] Using trained AI model to predict optimal parameters...")
+    logger.info("[Step 4] Using trained AI model to predict optimal parameters...")
     target_speed = 125.0
-    predicted_params = ai_optimizer.predict_optimal_params(target_speed)
+    predicted_params = ai_optimizer.predict_optimal_params(
+        target_speed,
+        baseline_snr_db=config.get('dsl.baseline.snr_db'),
+        baseline_attenuation_db=config.get('dsl.baseline.attenuation_db')
+    )
 
     if predicted_params:
-        print("\n✅ --- FINAL RESULT --- ✅")
-        print(f"To achieve a target speed of {target_speed} Mbps, the AI suggests:")
-        print(f"  - Predicted SNR Margin: {predicted_params['predicted_snr']} dB")
-        print(f"  - Predicted Attenuation: {predicted_params['predicted_attenuation']} dB")
+        logger.info("✅ --- FINAL RESULT --- ✅")
+        logger.info(f"To achieve a target speed of {target_speed} Mbps, the AI suggests:")
+        logger.info(f"  - Predicted SNR Margin: {predicted_params['predicted_snr']} dB")
+        logger.info(f"  - Predicted Attenuation: {predicted_params['predicted_attenuation']} dB")
     else:
-        print("\n❌ Could not generate a prediction. The model may not be trained.")
+        logger.error("❌ Could not generate a prediction. The model may not be trained.")
 
-    print("\n🎉 Demonstration Complete 🎉")
+    logger.info("🎉 Demonstration Complete 🎉")
 
 if __name__ == "__main__":
     main()

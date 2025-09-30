@@ -1,6 +1,9 @@
 from typing import Dict, Optional, List
 import re
 from src.entware_ssh import EntwareSSHInterface
+import logging
+
+logger = logging.getLogger("dsl_bypass")
 
 def discover_dsl_interfaces(ssh_interface: EntwareSSHInterface) -> Dict[str, dict]:
     """
@@ -9,7 +12,7 @@ def discover_dsl_interfaces(ssh_interface: EntwareSSHInterface) -> Dict[str, dic
     Returns:
         Dictionary with interface details including chipset info
     """
-    print("Discovering DSL interfaces with chipset detection...")
+    logger.info("Discovering DSL interfaces with chipset detection...")
     interfaces = {}
 
     # Method 1: Check /sys/class/net
@@ -40,10 +43,10 @@ def discover_dsl_interfaces(ssh_interface: EntwareSSHInterface) -> Dict[str, dic
         interfaces.update(chipset_interfaces)
 
     if not interfaces:
-        print("WARNING: No DSL interfaces detected. Hardware may not be DSL-capable.")
+        logger.warning("No DSL interfaces detected. Hardware may not be DSL-capable.")
         return {}
 
-    print(f"Discovered {len(interfaces)} DSL interface(s)")
+    logger.info(f"Discovered {len(interfaces)} DSL interface(s)")
     return interfaces
 
 
@@ -168,29 +171,29 @@ def read_kernel_parameter(ssh_interface: EntwareSSHInterface,
     """
     Enhanced parameter reading with validation
     """
-    print(f"Reading kernel parameter from: {param_path}")
+    logger.info(f"Reading kernel parameter from: {param_path}")
 
     # Validate path exists first
     stdout, _ = ssh_interface.execute_command(f"test -e {param_path} && echo 'exists'")
     if not stdout or "exists" not in stdout:
-        print(f"Parameter path does not exist: {param_path}")
+        logger.warning(f"Parameter path does not exist: {param_path}")
         return None
 
     # Check if path is readable
     stdout, _ = ssh_interface.execute_command(f"test -r {param_path} && echo 'readable'")
     if not stdout or "readable" not in stdout:
-        print(f"Parameter path is not readable: {param_path}")
+        logger.warning(f"Parameter path is not readable: {param_path}")
         return None
 
     # Read the parameter
     stdout, stderr = ssh_interface.execute_command(f"cat {param_path} 2>&1")
 
     if stderr and "permission denied" in stderr.lower():
-        print(f"Permission denied reading: {param_path}")
+        logger.error(f"Permission denied reading: {param_path}")
         return None
 
     if stderr and "no such file" in stderr.lower():
-        print(f"File not found: {param_path}")
+        logger.error(f"File not found: {param_path}")
         return None
 
     return stdout.strip() if stdout else None
@@ -203,14 +206,14 @@ def write_kernel_parameter(ssh_interface: EntwareSSHInterface,
     """
     Enhanced parameter writing with validation and backup
     """
-    print(f"Writing '{value}' to kernel parameter: {param_path}")
+    logger.info(f"Writing '{value}' to kernel parameter: {param_path}")
 
     # Backup original value
     original_value = None
     if validate:
         original_value = read_kernel_parameter(ssh_interface, param_path)
         if original_value is None:
-            print(f"Cannot read original value from {param_path}")
+            logger.warning(f"Cannot read original value from {param_path}")
             return False
 
     # Sanitize value
@@ -219,8 +222,8 @@ def write_kernel_parameter(ssh_interface: EntwareSSHInterface,
     # Check write permissions
     stdout, _ = ssh_interface.execute_command(f"test -w {param_path} && echo 'writable'")
     if not stdout or "writable" not in stdout:
-        print(f"Parameter path is not writable: {param_path}")
-        print("Try running with root privileges or check file permissions")
+        logger.error(f"Parameter path is not writable: {param_path}")
+        logger.error("Try running with root privileges or check file permissions")
         return False
 
     # Write the parameter
@@ -228,18 +231,18 @@ def write_kernel_parameter(ssh_interface: EntwareSSHInterface,
     stdout, stderr = ssh_interface.execute_command(command)
 
     if stderr:
-        print(f"Error writing to kernel parameter: {stderr}")
+        logger.error(f"Error writing to kernel parameter: {stderr}")
         return False
 
     # Validate write if requested
     if validate:
         new_value = read_kernel_parameter(ssh_interface, param_path)
         if new_value != value:
-            print(f"Validation failed: expected '{value}', got '{new_value}'")
+            logger.error(f"Validation failed: expected '{value}', got '{new_value}'")
             # Attempt rollback
             if original_value:
                 ssh_interface.execute_command(f"echo '{original_value}' > {param_path}")
             return False
 
-    print("Write operation completed successfully.")
+    logger.info("Write operation completed successfully.")
     return True

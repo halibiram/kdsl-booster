@@ -1,7 +1,6 @@
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("dsl_bypass")
 
 class UniversalDSLAMDetector:
     """
@@ -57,18 +56,18 @@ class UniversalDSLAMDetector:
             The name of the detected vendor (e.g., 'huawei') or None if no
             match is found.
         """
-        logging.info(f"Starting DSLAM vendor identification using methods: {methods}")
+        logger.info(f"Starting DSLAM vendor identification using methods: {methods}")
         for method_name in methods:
             if method_name in self.detection_methods:
-                logging.info(f"Attempting detection via {method_name}...")
+                logger.info(f"Attempting detection via {method_name}...")
                 vendor = self.detection_methods[method_name]()
                 if vendor:
-                    logging.info(f"Vendor identified as '{vendor}' using {method_name}.")
+                    logger.info(f"Vendor identified as '{vendor}' using {method_name}.")
                     return vendor
             else:
-                logging.warning(f"Detection method '{method_name}' not implemented.")
+                logger.warning(f"Detection method '{method_name}' not implemented.")
 
-        logging.warning("Could not identify DSLAM vendor with the specified methods.")
+        logger.warning("Could not identify DSLAM vendor with the specified methods.")
         return None
 
     def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> str | None:

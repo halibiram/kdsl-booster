@@ -7,10 +7,13 @@ that orchestrate the manipulation of kernel parameters to achieve the desired
 line performance.
 """
 import numpy as np
+import logging
 
 from src.entware_ssh import EntwareSSHInterface
 from src.keenetic_dsl_interface import KeeneticDSLInterface
 from src.advanced_dsl_physics import AdvancedDSLPhysics
+
+logger = logging.getLogger("dsl_bypass")
 
 
 class KernelDSLManipulator:
@@ -68,7 +71,7 @@ class KernelDSLManipulator:
         Returns:
             A dictionary reporting success and including the parameters for training.
         """
-        print(f"Setting target profile for {self.hal.__class__.__name__}: {target_rate_mbps} Mbps at {target_distance_m}m")
+        logger.info(f"Setting target profile for {self.hal.__class__.__name__}: {target_rate_mbps} Mbps at {target_distance_m}m")
 
         # 1. Calculate the physical parameters that correspond to the spoofed distance.
         snrs_per_tone = self.physics.calculate_snr_per_tone(distance_m=target_distance_m)
@@ -78,7 +81,7 @@ class KernelDSLManipulator:
         target_attenuation = np.mean(attenuations_per_tone)
 
         snr_register_value = int(target_snr * 10)
-        print(f"Calculated Targets for {target_distance_m}m -> Avg SNR: {target_snr:.1f} dB, Avg Attenuation: {target_attenuation:.2f} dB")
+        logger.info(f"Calculated Targets for {target_distance_m}m -> Avg SNR: {target_snr:.1f} dB, Avg Attenuation: {target_attenuation:.2f} dB")
 
         # 2. Write SNR margin to the hardware via the HAL
         success = self.hal.set_snr_margin(snr_register_value)
@@ -90,5 +93,5 @@ class KernelDSLManipulator:
             "applied_attenuation_db": target_attenuation,
         }
 
-        print(f"Manipulation results: {results}")
+        logger.info(f"Manipulation results: {results}")
         return results

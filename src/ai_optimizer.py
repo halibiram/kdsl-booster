@@ -1,8 +1,11 @@
 import numpy as np
+import logging
 from sklearn.linear_model import Ridge  # Regularized regression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+
+logger = logging.getLogger("dsl_bypass")
 
 class AIOptimizer:
     """
@@ -48,7 +51,7 @@ class AIOptimizer:
                 targets.append([target_snr, target_attenuation])
 
         if len(features) < 5:
-            print(f"WARNING: Only {len(features)} valid samples for training")
+            logger.warning(f"Only {len(features)} valid samples for training")
 
         return np.array(features), np.array(targets)
 
@@ -56,11 +59,11 @@ class AIOptimizer:
         """
         Train with proper validation
         """
-        print("Preparing data and training AI model...")
+        logger.info("Preparing data and training AI model...")
         X, y = self._prepare_data(experiment_results)
 
         if len(X) < 5:
-            print("Not enough data to train the model. Need at least 5 samples.")
+            logger.error("Not enough data to train the model. Need at least 5 samples.")
             return
 
         # Split data for validation
@@ -93,7 +96,7 @@ class AIOptimizer:
             "n_samples": len(X_train)
         }
 
-        print(f"Training complete. MSE: {train_mse:.2f}, R²: {train_r2:.3f}")
+        logger.info(f"Training complete. MSE: {train_mse:.2f}, R²: {train_r2:.3f}")
 
         # Validation if enough data
         if X_val is not None:
@@ -107,7 +110,7 @@ class AIOptimizer:
             self.training_metrics["val_mse"] = val_mse
             self.training_metrics["val_r2"] = val_r2
 
-            print(f"Validation: MSE: {val_mse:.2f}, R²: {val_r2:.3f}")
+            logger.info(f"Validation: MSE: {val_mse:.2f}, R²: {val_r2:.3f}")
 
     def predict_optimal_params(self, target_rate_mbps: float,
                               baseline_snr_db: float = 25,
@@ -117,7 +120,7 @@ class AIOptimizer:
         Enhanced prediction with confidence intervals
         """
         if not self._is_trained:
-            print("Model is not trained yet.")
+            logger.warning("Model is not trained yet.")
             return None
 
         # Prepare feature vector
@@ -141,7 +144,7 @@ class AIOptimizer:
             "training_metrics": self.training_metrics
         }
 
-        print(f"AI prediction for {target_rate_mbps} Mbps -> {result}")
+        logger.info(f"AI prediction for {target_rate_mbps} Mbps -> {result}")
         return result
 
     def _calculate_confidence(self, feature_vector: np.ndarray) -> float:
