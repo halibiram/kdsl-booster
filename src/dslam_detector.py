@@ -3,6 +3,7 @@ import json
 import re
 from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
 from src.dhcp_analyzer import DHCPAnalyzer
+from src.dns_analyzer import DNSAnalyzer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +22,9 @@ class UniversalDSLAMDetector:
     PAYLOAD_MATCH_SCORE = 5
     SNMP_MATCH_SCORE = 95
     DHCP_MATCH_SCORE = 90
-    CONFIDENCE_THRESHOLD = 50
+    DNS_VENDOR_SCORE = 25
+    DNS_MODEL_SCORE = 15
+    CONFIDENCE_THRESHOLD = 20 # Lowered threshold for DNS matches
 
     def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
         """
@@ -34,11 +37,13 @@ class UniversalDSLAMDetector:
         self.ssh = ssh_interface
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
         self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
+        self.dns_analyzer = DNSAnalyzer()
         self.signatures = self._load_signatures(signature_file)
         self.detection_methods = {
             'snmp': self._detect_via_snmp,
             'dhcp': self._detect_via_dhcp,
             'g_hs': self._detect_via_g_hs,
+            'dns': self._detect_via_dns,
         }
 
     def _load_signatures(self, signature_file: str) -> dict:
@@ -54,18 +59,9 @@ class UniversalDSLAMDetector:
             logging.error(f"Error decoding JSON from signature file: {signature_file}")
             return {}
 
-    def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp']) -> dict | None:
+    def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp', 'dns']) -> dict | None:
         """
         Attempts to identify the DSLAM vendor using a list of specified methods.
-
-        This method now returns the highest-confidence match from all specified
-        detection methods that exceeds the confidence threshold.
-
-        Args:
-            methods: A list of detection methods to try.
-
-        Returns:
-            A dictionary of the highest-confidence vendor match, or None.
         """
         if not self.signatures:
             logging.error("Signature database is empty. Cannot perform detection.")
@@ -86,7 +82,6 @@ class UniversalDSLAMDetector:
             logging.warning("Could not identify DSLAM vendor with the specified methods.")
             return None
 
-        # Sort all results by confidence and return the best one
         best_match = sorted(all_results, key=lambda x: x['confidence'], reverse=True)[0]
 
         if best_match['confidence'] >= self.CONFIDENCE_THRESHOLD:
@@ -95,6 +90,44 @@ class UniversalDSLAMDetector:
         else:
             logging.warning(f"No match exceeded the confidence threshold of {self.CONFIDENCE_THRESHOLD}%.")
             return None
+
+    def _detect_via_dns(self, target_ip: str = '8.8.8.8') -> list:
+        """
+        Performs a reverse DNS lookup and matches the hostname against patterns.
+        Note: target_ip is a public IP for simulation purposes in a sandboxed env.
+        """
+        logging.info("Attempting to identify vendor via reverse DNS analysis.")
+        hostname = self.dns_analyzer.get_hostname_by_ip(target_ip)
+        if not hostname:
+            return []
+
+        results = []
+        hostname_lower = hostname.lower()
+
+        for vendor, data in self.signatures.items():
+            dns_sig = data.get('dns', {})
+            score = 0
+            matched_patterns = []
+
+            for pattern in dns_sig.get('vendor_patterns', []):
+                if re.search(pattern, hostname_lower):
+                    score += self.DNS_VENDOR_SCORE
+                    matched_patterns.append(pattern)
+
+            for pattern in dns_sig.get('model_patterns', []):
+                if re.search(pattern, hostname_lower):
+                    score += self.DNS_MODEL_SCORE
+                    matched_patterns.append(pattern)
+
+            if score > 0:
+                results.append({
+                    "vendor": vendor,
+                    "confidence": min(score, 100),
+                    "description": f"DNS hostname match on '{hostname}' (patterns: {matched_patterns})",
+                    "method": "dns"
+                })
+
+        return sorted(results, key=lambda x: x['confidence'], reverse=True)
 
     def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
         """
@@ -116,17 +149,9 @@ class UniversalDSLAMDetector:
         for vendor, data in self.signatures.items():
             snmp_sig = data.get('snmp', {})
             if 'sysObjectID' in snmp_sig and returned_oid.startswith(snmp_sig['sysObjectID']):
-                logging.info(f"Matched SNMP OID for vendor: {vendor}")
-                return [{
-                    "vendor": vendor,
-                    "confidence": self.SNMP_MATCH_SCORE,
-                    "description": f"SNMP sysObjectID match ({returned_oid})",
-                    "method": "snmp"
-                }]
+                return [{"vendor": vendor, "confidence": self.SNMP_MATCH_SCORE, "description": f"SNMP sysObjectID match ({returned_oid})", "method": "snmp"}]
 
-        logging.warning("Returned SNMP OID did not match any known vendor.")
         return []
-
 
     def _detect_via_dhcp(self) -> list:
         """
@@ -140,11 +165,9 @@ class UniversalDSLAMDetector:
             return []
 
         circuit_id = analysis['circuit_id']
-        # The circuit_id is often bytes, so decode for regex matching
         try:
             circuit_id_str = circuit_id.decode('ascii', errors='ignore')
         except:
-            logging.warning(f"Could not decode Circuit ID: {circuit_id}")
             return []
 
         logging.info(f"DHCP analysis yielded Circuit ID: {circuit_id_str}")
@@ -154,15 +177,8 @@ class UniversalDSLAMDetector:
             if 'circuit_id_pattern' in dhcp_sig:
                 pattern = dhcp_sig['circuit_id_pattern']
                 if re.match(pattern, circuit_id_str):
-                    logging.info(f"Matched DHCP Circuit ID for vendor: {vendor}")
-                    return [{
-                        "vendor": vendor,
-                        "confidence": self.DHCP_MATCH_SCORE,
-                        "description": f"DHCP Circuit ID match (pattern: {pattern})",
-                        "method": "dhcp"
-                    }]
+                    return [{"vendor": vendor, "confidence": self.DHCP_MATCH_SCORE, "description": f"DHCP Circuit ID match (pattern: {pattern})", "method": "dhcp"}]
 
-        logging.warning("DHCP Circuit ID did not match any known vendor patterns.")
         return []
 
     def _calculate_ghs_confidence(self, analysis: dict) -> list:
@@ -196,31 +212,18 @@ class UniversalDSLAMDetector:
                     score += self.PAYLOAD_MATCH_SCORE
 
                 if score > 0:
-                    results.append({
-                        "vendor": vendor,
-                        "confidence": min(score, 100),
-                        "description": sig.get('description'),
-                        "method": "g_hs"
-                    })
+                    results.append({"vendor": vendor, "confidence": min(score, 100), "description": sig.get('description'), "method": "g_hs"})
 
         return sorted(results, key=lambda x: x['confidence'], reverse=True)
-
 
     def _detect_via_g_hs(self) -> list:
         """
         Identifies vendor by analyzing the G.hs handshake and scoring matches.
         """
         logging.info("Attempting to identify vendor via G.hs handshake analysis.")
-
         if not self.ghs_analyzer.capture_handshake():
-            logging.error("Failed to capture G.hs handshake. Aborting G.hs detection.")
             return []
-
         analysis = self.ghs_analyzer.analyze_capture()
         if not analysis:
-            logging.warning("G.hs analysis did not yield any results.")
             return []
-
-        logging.info(f"G.hs analysis yielded Vendor ID: {analysis.get('vendor_id')}, VSI: {analysis.get('vsi', b'').hex()}")
-
         return self._calculate_ghs_confidence(analysis)
