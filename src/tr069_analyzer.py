@@ -31,9 +31,18 @@ class TR069Analyzer:
             f"tcpdump -i {interface} -w {self.capture_file_path} "
             f"-U -W 1 -G {duration} 'tcp port 7547'"
         )
-        # In a real environment, this command would be executed.
-        # For this simulation, we proceed directly to analysis of a mock file.
-        logging.info("Skipping live packet capture in simulated environment.")
+        try:
+            # Note: This command is not expected to succeed in the sandboxed test environment,
+            # but the error handling is implemented for real-world use.
+            _, stderr = self.ssh.execute_command(command)
+            if stderr and "listening on" not in stderr.lower() and "packets captured" not in stderr.lower():
+                logging.warning(f"tcpdump for TR-069 returned an error or unexpected output: {stderr.strip()}")
+        except Exception as e:
+            logging.error(f"An exception occurred while executing TR-069 tcpdump: {e}", exc_info=True)
+            # In case of capture failure, we can't proceed with analysis of the (non-existent) file.
+            return None
+
+        logging.info("TR-069 packet capture completed.")
         return self._analyze_capture_file()
 
     def _analyze_capture_file(self) -> dict | None:

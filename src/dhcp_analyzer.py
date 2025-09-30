@@ -28,26 +28,22 @@ class DHCPAnalyzer:
     def capture_and_analyze(self, interface: str = 'eth0', duration: int = 20) -> dict | None:
         """
         Captures DHCP traffic and analyzes it for Option 82.
-
-        Args:
-            interface: The network interface to capture from (e.g., 'eth0', 'br-lan').
-            duration: The duration in seconds to capture traffic.
-
-        Returns:
-            A dictionary with the parsed 'circuit_id' and 'remote_id', or None.
         """
         logging.info(f"Starting DHCP packet capture on {interface} for {duration} seconds.")
         command = (
             f"tcpdump -i {interface} -w {self.capture_file_path} "
             f"-U -W 1 -G {duration} 'udp port 67 or 68'"
         )
-        stdout, stderr = self.ssh.execute_command(command)
-
-        if stderr and "listening on" not in stderr.lower():
-            logging.error(f"Error during tcpdump execution: {stderr}")
+        try:
+            _, stderr = self.ssh.execute_command(command)
+            if stderr and "listening on" not in stderr.lower() and "packets captured" not in stderr.lower():
+                logging.warning(f"tcpdump for DHCP returned an error or unexpected output: {stderr.strip()}")
+                # Continue to analysis, as some packets might have been captured.
+        except Exception as e:
+            logging.error(f"An exception occurred while executing DHCP tcpdump: {e}", exc_info=True)
             return None
-        logging.info("Packet capture completed.")
 
+        logging.info("DHCP packet capture completed.")
         return self._analyze_capture_file()
 
     def _analyze_capture_file(self) -> dict | None:
@@ -73,28 +69,37 @@ class DHCPAnalyzer:
     def _parse_option_82_suboptions(self, data: bytes) -> dict:
         """
         Manually parses the TLV-encoded sub-options within DHCP Option 82.
+        This parser is hardened against malformed data.
         """
         analysis = {}
         i = 0
-        while i < len(data):
-            sub_opt_code = data[i]
-            # Ensure there is a length byte
-            if i + 1 >= len(data):
-                break
-            sub_opt_len = data[i+1]
+        try:
+            while i < len(data):
+                # Check for at least 2 bytes (Type and Length)
+                if i + 1 >= len(data):
+                    logging.warning("Malformed Option 82: Truncated sub-option header.")
+                    break
 
-            # Ensure the full sub-option is within the data bounds
-            if i + 1 + sub_opt_len >= len(data) + 1:
-                break
+                sub_opt_code = data[i]
+                sub_opt_len = data[i+1]
 
-            sub_opt_value = data[i+2 : i+2+sub_opt_len]
+                # Check if the declared length is valid
+                value_start_index = i + 2
+                value_end_index = value_start_index + sub_opt_len
+                if value_end_index > len(data):
+                    logging.warning(f"Malformed Option 82: Sub-option {sub_opt_code} has invalid length {sub_opt_len}.")
+                    break
 
-            if sub_opt_code == 1: # Agent Circuit ID
-                analysis['circuit_id'] = sub_opt_value
-            elif sub_opt_code == 2: # Agent Remote ID
-                analysis['remote_id'] = sub_opt_value
+                sub_opt_value = data[value_start_index:value_end_index]
 
-            i += 2 + sub_opt_len # Move to the next sub-option
+                if sub_opt_code == 1: # Agent Circuit ID
+                    analysis['circuit_id'] = sub_opt_value
+                elif sub_opt_code == 2: # Agent Remote ID
+                    analysis['remote_id'] = sub_opt_value
+
+                i = value_end_index # Move to the next sub-option
+        except Exception as e:
+            logging.error(f"An exception occurred while parsing DHCP Option 82 sub-options: {e}", exc_info=True)
 
         return analysis
 

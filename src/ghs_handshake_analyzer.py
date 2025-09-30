@@ -33,13 +33,17 @@ class GHSHandshakeAnalyzer:
             f"tcpdump -i {interface} -w {self.capture_file_path} "
             f"-U -W 1 -G {duration} 'llc'"
         )
-        stdout, stderr = self.ssh.execute_command(command)
-
-        if stderr and "listening on" not in stderr.lower():
-            logging.error(f"Error during tcpdump execution: {stderr}")
+        try:
+            _, stderr = self.ssh.execute_command(command)
+            # tcpdump logs its status to stderr, so we check for common success messages.
+            if stderr and "listening on" not in stderr.lower() and "packets captured" not in stderr.lower():
+                logging.warning(f"tcpdump for G.hs returned an error or unexpected output: {stderr.strip()}")
+                return False
+        except Exception as e:
+            logging.error(f"An exception occurred while executing G.hs tcpdump: {e}", exc_info=True)
             return False
 
-        logging.info(f"Packet capture completed.")
+        logging.info("G.hs packet capture completed.")
         return True
 
     def analyze_capture(self) -> dict:
@@ -99,6 +103,7 @@ class GHSHandshakeAnalyzer:
     def _parse_ghs_message(self, payload: bytes) -> dict | None:
         """
         Parses a raw G.994.1 message payload into a structured format.
+        This has been hardened against malformed payloads.
         """
         if not payload: return None
         msg_type_map = {1: 'CLR', 2: 'CL', 3: 'MS', 4: 'ACK'}
@@ -107,17 +112,34 @@ class GHSHandshakeAnalyzer:
 
         parsed_data = {"type": msg_type, "payload": payload, "vendor_id": None, "vsi": None}
         try:
-            nsif_marker_index = payload.index(b'\x91', 1)
-            if nsif_marker_index + 1 < len(payload):
-                param_len = payload[nsif_marker_index + 1]
-                nsif_data_start = nsif_marker_index + 2
-                if nsif_data_start + param_len <= len(payload):
-                    nsif_data = payload[nsif_data_start : nsif_data_start + param_len]
-                    if len(nsif_data) >= 6:
-                        parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
-                        parsed_data["vsi"] = nsif_data[6:]
-        except ValueError:
-            pass # No NSIF found
+            # Start search for NSIF marker (0x91) after the first byte.
+            i = 1
+            while i < len(payload):
+                if payload[i] == 0x91:
+                    # Found the NSIF marker. Check for length byte.
+                    if i + 1 < len(payload):
+                        param_len = payload[i + 1]
+                        nsif_data_start = i + 2
+                        # Check if the full parameter is within the payload bounds.
+                        if nsif_data_start + param_len <= len(payload):
+                            nsif_data = payload[nsif_data_start : nsif_data_start + param_len]
+                            # NSIF must have at least 6 bytes for country code + vendor ID.
+                            if len(nsif_data) >= 6:
+                                parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
+                                parsed_data["vsi"] = nsif_data[6:]
+                            # Break after finding the first valid NSIF.
+                            break
+                        else:
+                            # Malformed length, stop parsing.
+                            break
+                    else:
+                        # Marker found at the very end, malformed.
+                        break
+                i += 1 # Move to the next byte to search for the marker.
+        except Exception as e:
+            # Catch any other unexpected parsing errors.
+            logging.warning(f"Unexpected error while parsing G.hs message: {e}")
+
         return parsed_data
 
     def _extract_cl_message(self, messages: list) -> dict | None:

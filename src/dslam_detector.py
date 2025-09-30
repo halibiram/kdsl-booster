@@ -28,6 +28,8 @@ class UniversalDSLAMDetector:
     GHS_VSI_CERTAINTY = 25
     DNS_VENDOR_CERTAINTY = 80
     DNS_MODEL_CERTAINTY = 20
+    # A final score must be above this threshold to be considered a valid result.
+    FINAL_CONFIDENCE_THRESHOLD = 10
 
     def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
         """
@@ -59,13 +61,13 @@ class UniversalDSLAMDetector:
 
     def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp', 'dns', 'tr069', 'timing']) -> dict | None:
         """
-        Runs all specified detection methods and correlates the results.
+        Runs all specified detection methods, correlates the results, and returns the
+        most likely vendor if the confidence exceeds a threshold.
         """
         if not self.signatures:
             logging.error("Signature database is empty. Cannot perform detection.")
             return None
 
-        # 1. Run all applicable detection methods
         all_findings = []
         for method_name in methods:
             if method_name in self.detection_methods:
@@ -80,45 +82,48 @@ class UniversalDSLAMDetector:
             logging.warning("Could not identify DSLAM vendor with the specified methods.")
             return None
 
-        # 2. Collect confidence scores from each method
         vendor_scores = defaultdict(float)
         vendor_evidence = defaultdict(list)
 
         for finding in all_findings:
             vendor = finding['vendor']
             method = finding['method']
-            certainty = finding['certainty'] # 0-100 score from the method
+            certainty = finding['certainty']
             weight = self.METHOD_WEIGHTS.get(method, 0)
-
-            # 3. Apply weighted scoring
             score = (certainty / 100.0) * weight
             vendor_scores[vendor] += score
             vendor_evidence[vendor].append(finding)
 
-        # 4. Resolve conflicts using prioritization rules
-        sorted_vendors = sorted(vendor_scores.items(), key=lambda item: item[1], reverse=True)
-
-        if not sorted_vendors:
+        if not vendor_scores:
             logging.warning("No vendor matched any signature.")
             return None
 
-        # Conflict resolution
+        sorted_vendors = sorted(vendor_scores.items(), key=lambda item: item[1], reverse=True)
+
         if len(sorted_vendors) > 1:
             top_vendor, top_score = sorted_vendors[0]
             second_vendor, second_score = sorted_vendors[1]
-            # If scores are close and high, flag for review
             if top_score > 30 and (top_score - second_score) < 10:
-                logging.warning(f"Conflict detected: High confidence in multiple vendors. "
-                                f"Top: {top_vendor} ({top_score:.2f}%), "
-                                f"Second: {second_vendor} ({second_score:.2f}%)")
+                logging.warning(
+                    f"Conflict detected: High confidence in multiple vendors. "
+                    f"Top: {top_vendor} ({top_score:.2f}%) with evidence: {vendor_evidence[top_vendor]}. "
+                    f"Second: {second_vendor} ({second_score:.2f}%) with evidence: {vendor_evidence[second_vendor]}."
+                )
 
-        # 5. Output final DSLAM identification
         best_vendor, best_score = sorted_vendors[0]
+
+        if best_score < self.FINAL_CONFIDENCE_THRESHOLD:
+            logging.warning(
+                f"Best match '{best_vendor}' with score {best_score:.2f}% "
+                f"did not meet the final confidence threshold of {self.FINAL_CONFIDENCE_THRESHOLD}%."
+            )
+            return None
 
         return {
             "primary_vendor": best_vendor,
             "overall_confidence": min(round(best_score, 2), 100.0),
-            "contributing_methods": vendor_evidence[best_vendor]
+            "contributing_methods": vendor_evidence[best_vendor],
+            "all_results": {vendor: round(score, 2) for vendor, score in sorted_vendors}
         }
 
     def _detect_via_g_hs(self) -> list:
@@ -128,24 +133,21 @@ class UniversalDSLAMDetector:
         findings = []
         analyzed_vendor_id = analysis['vendor_id']
         analyzed_vsi = analysis.get('vsi', b'').decode('ascii', errors='ignore')
-
         for vendor, data in self.signatures.items():
             ghs_data = data.get('ghs', {})
             for sig in ghs_data.get('signatures', []):
                 certainty = 0
-                if sig.get('vendor_id') == analyzed_vendor_id:
-                    certainty += self.GHS_VENDOR_ID_CERTAINTY
+                if sig.get('vendor_id') == analyzed_vendor_id: certainty += self.GHS_VENDOR_ID_CERTAINTY
                 for pattern in sig.get('vsi_patterns', []):
-                    if pattern in analyzed_vsi:
-                        certainty += self.GHS_VSI_CERTAINTY
+                    if pattern in analyzed_vsi: certainty += self.GHS_VSI_CERTAINTY
                 if certainty > 0:
                     findings.append({"vendor": vendor, "certainty": min(certainty, 100), "method": "g_hs", "raw_data": f"VSI: {analyzed_vsi}"})
         return findings
 
     def _detect_via_timing(self) -> list:
         analysis = self.ghs_analyzer.analyze_capture()
-        duration = analysis.get("handshake_duration")
-        if duration is None: return []
+        if not analysis or "handshake_duration" not in analysis: return []
+        duration = analysis["handshake_duration"]
 
         findings = []
         for vendor, data in self.signatures.items():
@@ -157,8 +159,14 @@ class UniversalDSLAMDetector:
     def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
         oid_to_query = "1.3.6.1.2.1.1.2.0"
         command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {oid_to_query}"
-        stdout, _ = self.ssh.execute_command(command)
-        if not stdout: return []
+        try:
+            stdout, stderr = self.ssh.execute_command(command)
+            if not stdout or (stderr and "timeout" not in stderr.lower()):
+                if stderr: logging.warning(f"SNMP command execution failed or returned an error: {stderr.strip()}")
+                return []
+        except Exception as e:
+            logging.error(f"An exception occurred while executing SNMP command: {e}", exc_info=True)
+            return []
 
         returned_oid = stdout.strip()
         for vendor, data in self.signatures.items():
@@ -170,7 +178,6 @@ class UniversalDSLAMDetector:
     def _detect_via_dhcp(self) -> list:
         analysis = self.dhcp_analyzer.capture_and_analyze()
         if not analysis or 'circuit_id' not in analysis: return []
-
         circuit_id_str = analysis['circuit_id'].decode('ascii', errors='ignore')
         for vendor, data in self.signatures.items():
             dhcp_sig = data.get('dhcp', {})
@@ -181,16 +188,13 @@ class UniversalDSLAMDetector:
     def _detect_via_dns(self, target_ip: str = '8.8.8.8') -> list:
         hostname = self.dns_analyzer.get_hostname_by_ip(target_ip)
         if not hostname: return []
-
         findings = []
         hostname_lower = hostname.lower()
         for vendor, data in self.signatures.items():
             dns_sig = data.get('dns', {})
             certainty = 0
-            if any(re.search(p, hostname_lower) for p in dns_sig.get('vendor_patterns', [])):
-                certainty += self.DNS_VENDOR_CERTAINTY
-            if any(re.search(p, hostname_lower) for p in dns_sig.get('model_patterns', [])):
-                certainty += self.DNS_MODEL_CERTAINTY
+            if any(re.search(p, hostname_lower) for p in dns_sig.get('vendor_patterns', [])): certainty += self.DNS_VENDOR_CERTAINTY
+            if any(re.search(p, hostname_lower) for p in dns_sig.get('model_patterns', [])): certainty += self.DNS_MODEL_CERTAINTY
             if certainty > 0:
                 findings.append({"vendor": vendor, "certainty": certainty, "method": "dns", "raw_data": hostname})
         return findings
@@ -198,7 +202,6 @@ class UniversalDSLAMDetector:
     def _detect_via_tr069(self) -> list:
         analysis = self.tr069_analyzer.capture_and_analyze()
         if not analysis or 'manufacturer' not in analysis: return []
-
         manufacturer = analysis['manufacturer']
         for vendor, data in self.signatures.items():
             tr069_sig = data.get('tr069', {})
