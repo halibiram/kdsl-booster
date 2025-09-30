@@ -11,6 +11,59 @@ import numpy as np
 from src.entware_ssh import EntwareSSHInterface
 from src.keenetic_dsl_interface import KeeneticDSLInterface
 from src.advanced_dsl_physics import AdvancedDSLPhysics
+from src.ghs_packet_crafter import craft_fake_cl_message
+
+
+class GHSHandshakeSpoofer:
+    """
+    Handles the crafting and injection of malicious G.hs handshake packets
+    to manipulate the DSL connection at the protocol level.
+    """
+
+    def __init__(self, ssh_interface: EntwareSSHInterface):
+        """
+        Initializes the spoofer with an SSH interface.
+
+        Args:
+            ssh_interface: An active EntwareSSHInterface instance.
+        """
+        self.ssh = ssh_interface
+
+    def craft_and_inject_fake_capabilities(
+        self,
+        interface: str = 'dsl0',
+        vendor_id: bytes = b'FAKE_CPE',
+        profile_35b: bool = True,
+        force_vectoring: bool = True
+    ) -> bool:
+        """
+        Crafts a fake G.hs CL (Capabilities List) message and injects it.
+
+        Args:
+            interface: The network interface to inject on (e.g., 'dsl0').
+            vendor_id: The fake vendor ID to advertise.
+            profile_35b: Whether to advertise support for VDSL2 profile 35b.
+            force_vectoring: Whether to advertise support for G.vector.
+
+        Returns:
+            True if the injection command was sent, False otherwise.
+        """
+        print("Crafting malicious G.hs capabilities message...")
+        packet_bytes = craft_fake_cl_message(
+            vendor_id=vendor_id,
+            profile_35b=profile_35b,
+            force_vectoring=force_vectoring
+        )
+
+        print(f"Attempting to inject {len(packet_bytes)} bytes onto interface {interface}...")
+        success = self.ssh.inject_raw_packet(interface, packet_bytes)
+
+        if success:
+            print("Successfully sent spoofed capabilities packet.")
+        else:
+            print("Failed to inject spoofed capabilities packet.")
+
+        return success
 
 
 class KernelDSLManipulator:
