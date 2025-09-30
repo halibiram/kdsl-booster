@@ -101,9 +101,29 @@ class EntwareSSHInterface:
             self._connection_thread = None
             logging.info("SSH connection closed.")
 
-    def execute_command(self, command, timeout=15):
+    def _get_sftp_client(self):
+        """Returns an active SFTP client, raising an exception on failure."""
+        with self._lock:
+            if not self.is_connected():
+                raise ConnectionError("SSH client is not connected.")
+            return self._ssh_client.open_sftp()
+
+    def sftp_get(self, remote_path, local_path):
+        """Downloads a file from the remote device."""
+        logging.info(f"SFTP GET: Downloading {remote_path} to {local_path}")
+        with self._get_sftp_client() as sftp:
+            sftp.get(remote_path, local_path)
+
+    def sftp_put_string(self, content: str, remote_path: str):
+        """Uploads a string as a file to the remote device."""
+        logging.info(f"SFTP PUT: Writing string to {remote_path}")
+        with self._get_sftp_client() as sftp:
+            with sftp.open(remote_path, 'w') as f:
+                f.write(content)
+
+    def execute_command(self, command, timeout=15, stdin_data=None):
         """
-        Executes a command on the remote device with a robust timeout.
+        Executes a command on the remote device with a robust timeout and optional stdin data.
         Returns (stdout, stderr) or (None, error_message) on failure.
         """
         with self._lock:
@@ -114,6 +134,14 @@ class EntwareSSHInterface:
 
             try:
                 stdin, stdout, stderr = self._ssh_client.exec_command(command, timeout=timeout)
+
+                if stdin_data:
+                    if isinstance(stdin_data, str):
+                        stdin.write(stdin_data)
+                    else:
+                        stdin.channel.sendall(stdin_data)
+                    stdin.channel.shutdown_write()
+
                 channel = stdout.channel
 
                 start_time = time.time()
@@ -137,10 +165,80 @@ class EntwareSSHInterface:
                 return None, str(e)
             except Exception as e:
                 logging.error(f"Failed to execute command '{command}': {e}")
-                # After a command failure, trigger a connection check
                 with self._lock:
                     self._is_connected = False
                 return None, str(e)
+
+    def inject_raw_packet(self, interface: str, packet_bytes: bytes) -> bool:
+        """
+        Injects a raw layer 2 packet onto a network interface on the remote device.
+        This method uploads and executes a temporary Python script that uses Scapy
+        to perform the injection.
+
+        Args:
+            interface: The network interface to inject on (e.g., 'dsl0').
+            packet_bytes: The raw bytes of the packet to inject.
+
+        Returns:
+            True if injection was successful, False otherwise.
+        """
+        logging.info(f"Preparing to inject {len(packet_bytes)} bytes on interface {interface}.")
+
+        # Step 1: Ensure Scapy is available on the remote device
+        stdout, stderr = self.execute_command("opkg list-installed | grep python3-scapy")
+        if stdout is None or "python3-scapy" not in stdout:
+            logging.warning("Scapy not found on remote device. Attempting to install...")
+            # Use a longer timeout for package installation
+            stdout, stderr = self.execute_command("opkg update && opkg install python3-scapy", timeout=120)
+            if stdout is None or ("Configuring python3-scapy" not in stdout and "unpacked" not in stdout):
+                logging.error(f"Failed to install Scapy. Stdout: {stdout}, Stderr: {stderr}")
+                return False
+            logging.info("Scapy installed successfully.")
+
+        # Step 2: Define the remote injection script
+        injector_script = '''
+import sys
+from scapy.all import L2Socket, conf
+
+if len(sys.argv) < 2:
+    print("Usage: python_injector.py <interface>", file=sys.stderr)
+    sys.exit(1)
+
+interface = sys.argv[1]
+packet_bytes = sys.stdin.buffer.read()
+
+try:
+    conf.verb = 0
+    s = L2Socket(iface=interface)
+    s.send(packet_bytes)
+    s.close()
+    print(f"Successfully sent {len(packet_bytes)} bytes to {interface}.")
+except Exception as e:
+    print(f"Error sending packet: {e}", file=sys.stderr)
+    sys.exit(1)
+'''
+        remote_script_path = "/tmp/packet_injector.py"
+
+        # Step 3: Upload the script
+        try:
+            self.sftp_put_string(injector_script, remote_script_path)
+        except Exception as e:
+            logging.error(f"Failed to upload injection script: {e}")
+            return False
+
+        # Step 4: Execute the script, piping the packet data to its stdin
+        command = f"python3 {remote_script_path} {interface}"
+        stdout, stderr = self.execute_command(command, stdin_data=packet_bytes)
+
+        if stderr:
+            logging.error(f"Error during packet injection: {stderr}")
+            return False
+
+        if stdout:
+            logging.info(f"Packet injection script executed. Stdout: {stdout.strip()}")
+            return "Successfully sent" in stdout
+
+        return False
 
     def is_connected(self):
         """

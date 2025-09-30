@@ -12,7 +12,7 @@ It simulates the entire workflow:
 from unittest.mock import MagicMock
 import numpy as np
 
-from src.spoofing import KernelDSLManipulator
+from src.spoofing import KernelDSLManipulator, GHSHandshakeSpoofer
 from src.experimentation import ExperimentRunner
 from src.ai_optimizer import AIOptimizer
 
@@ -24,6 +24,9 @@ def main():
     # For this demo, we mock the interface to allow the script to run.
     print("\n[Step 1] Initializing components...")
     mock_ssh_interface = MagicMock()
+
+    # Mock the inject_raw_packet method to simulate success for the G.hs spoofer
+    mock_ssh_interface.inject_raw_packet.return_value = True
 
     def mock_execute_command(command, **kwargs):
         """A more intelligent mock for SSH commands."""
@@ -38,14 +41,32 @@ def main():
 
     mock_ssh_interface.execute_command.side_effect = mock_execute_command
 
-    # Initialize the core components
+    # --- 2. G.hs Handshake Injection Demonstration ---
+    print("\n[Step 2] Demonstrating G.hs Handshake Injection...")
+    ghs_spoofer = GHSHandshakeSpoofer(ssh_interface=mock_ssh_interface)
+
+    # Craft and inject a fake capabilities message to force 35b profile
+    injection_success = ghs_spoofer.craft_and_inject_fake_capabilities(
+        interface='dsl0',
+        vendor_id=b'DSL-BYPASS-ULTRA',
+        profile_35b=True,
+        force_vectoring=True
+    )
+
+    if injection_success:
+        print("G.hs injection demonstration successful.")
+    else:
+        print("G.hs injection demonstration failed.")
+
+    # --- 3. Kernel-Level Manipulation Setup ---
+    print("\n[Step 3] Initializing components for kernel-level manipulation...")
     manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface)
     experiment_runner = ExperimentRunner(manipulator=manipulator, ssh_interface=mock_ssh_interface)
     ai_optimizer = AIOptimizer()
     print("Components initialized successfully.")
 
-    # --- 2. Automated Data Collection ---
-    print("\n[Step 2] Running automated parameter sweep to collect data...")
+    # --- 4. Automated Data Collection ---
+    print("\n[Step 4] Running automated parameter sweep to collect data...")
 
     # To keep the demo fast, we'll test a small but effective range of parameters.
     rate_range = np.arange(40, 151, 10)  # 40, 50, ..., 150 Mbps
@@ -54,12 +75,12 @@ def main():
     experiment_runner.parameter_sweep(rate_range, distance_range)
     print(f"Data collection complete. {len(experiment_runner.results)} experiments run.")
 
-    # --- 3. AI Model Training ---
-    print("\n[Step 3] Training AI model on collected data...")
+    # --- 5. AI Model Training ---
+    print("\n[Step 5] Training AI model on collected data...")
     ai_optimizer.train(experiment_runner.results)
 
-    # --- 4. AI-Powered Prediction ---
-    print("\n[Step 4] Using trained AI model to predict optimal parameters...")
+    # --- 6. AI-Powered Prediction ---
+    print("\n[Step 6] Using trained AI model to predict optimal parameters...")
     target_speed = 125.0
     predicted_params = ai_optimizer.predict_optimal_params(target_speed)
 
