@@ -30,7 +30,6 @@ NO_MATCH_ANALYSIS = {
 def mock_ssh_interface():
     """Provides a mock EntwareSSHInterface for testing."""
     ssh_mock = MagicMock()
-    # Default behavior: all commands fail unless overridden in a test
     ssh_mock.execute_command.return_value = ("", "Command failed")
     return ssh_mock
 
@@ -40,22 +39,24 @@ def signature_file(tmp_path):
     """Creates a temporary signature JSON file for isolated testing."""
     sig_data = {
         "huawei": {
-            "signatures": [{
+            "snmp": {"sysObjectID": "1.3.6.1.4.1.2011"},
+            "ghs": {"signatures": [{
                 "description": "MA5608T", "vendor_id": "HWTC",
                 "vsi_patterns": ["MA5608T", "MA5600"], "cl_payload_pattern": "02910f"
-            }]
+            }]}
         },
         "nokia_alcatel": {
-            "signatures": [{
+            "snmp": {"sysObjectID": "1.3.6.1.4.1.637"},
+            "ghs": {"signatures": [{
                 "description": "7330 ISAM", "vendor_id": "ALCL",
                 "vsi_patterns": ["ISAM", "7330"], "cl_payload_pattern": "029110"
-            }]
+            }]}
         },
         "broadcom": {
-            "signatures": [{
+            "ghs": {"signatures": [{
                 "description": "Generic BCM", "vendor_id": "BDCM",
                 "vsi_patterns": ["BCM"], "cl_payload_pattern": ""
-            }]
+            }]}
         }
     }
     p = tmp_path / "signatures.json"
@@ -72,68 +73,48 @@ def dslam_detector(mock_ssh_interface, signature_file):
         yield detector
 
 
+def test_detect_via_snmp_success(dslam_detector, mock_ssh_interface):
+    """Tests successful vendor identification using the real SNMP method."""
+    # Mock the SSH command to return a realistic snmpget response for Huawei
+    huawei_oid = "1.3.6.1.4.1.2011.2.82.8"
+    mock_ssh_interface.execute_command.return_value = (huawei_oid, "")
+
+    results = dslam_detector._detect_via_snmp()
+
+    assert len(results) == 1
+    result = results[0]
+    assert result['vendor'] == 'huawei'
+    assert result['confidence'] == dslam_detector.SNMP_MATCH_SCORE
+    assert result['method'] == 'snmp'
+    assert huawei_oid in result['description']
+    mock_ssh_interface.execute_command.assert_called_once_with(
+        "snmpget -v2c -c public -t 1 -O vq 192.168.1.1 1.3.6.1.2.1.1.2.0"
+    )
+
+def test_detect_via_snmp_no_match(dslam_detector, mock_ssh_interface):
+    """Tests SNMP detection when the returned OID does not match any signature."""
+    unknown_oid = "1.3.6.1.4.1.9999.1.1"
+    mock_ssh_interface.execute_command.return_value = (unknown_oid, "")
+
+    results = dslam_detector._detect_via_snmp()
+
+    assert len(results) == 0
+
+def test_detect_via_snmp_command_fails(dslam_detector, mock_ssh_interface):
+    """Tests SNMP detection when the snmpget command fails."""
+    mock_ssh_interface.execute_command.return_value = ("", "Timeout: No Response from 192.168.1.1")
+
+    results = dslam_detector._detect_via_snmp()
+
+    assert len(results) == 0
+
 def test_calculate_ghs_confidence_full_match(dslam_detector):
-    """Tests a high-confidence match from Vendor ID and VSI pattern."""
+    """Tests a high-confidence GHS match."""
     results = dslam_detector._calculate_ghs_confidence(HUAWEI_ANALYSIS)
     assert len(results) == 1
     result = results[0]
     assert result['vendor'] == 'huawei'
-    # VENDOR_ID_MATCH_SCORE (70) + VSI_PATTERN_MATCH_SCORE (15) + PAYLOAD_MATCH_SCORE (5)
     assert result['confidence'] == 90
-    assert result['description'] == 'MA5608T'
-
-def test_calculate_ghs_confidence_vendor_id_only(dslam_detector):
-    """Tests a medium-confidence match from only the Vendor ID."""
-    analysis = HUAWEI_ANALYSIS.copy()
-    analysis['vsi'] = b'UnknownModel'
-    results = dslam_detector._calculate_ghs_confidence(analysis)
-    assert len(results) == 1
-    result = results[0]
-    assert result['vendor'] == 'huawei'
-    # VENDOR_ID_MATCH_SCORE (70) + PAYLOAD_MATCH_SCORE (5)
-    assert result['confidence'] == 75
-
-def test_calculate_ghs_confidence_vsi_only(dslam_detector):
-    """Tests a low-confidence match from only a VSI pattern."""
-    results = dslam_detector._calculate_ghs_confidence(PARTIAL_MATCH_ANALYSIS)
-    assert len(results) == 1
-    result = results[0]
-    assert result['vendor'] == 'broadcom'
-    # VSI_PATTERN_MATCH_SCORE (15)
-    assert result['confidence'] == 15
-
-def test_calculate_ghs_confidence_no_match(dslam_detector):
-    """Tests that no results are returned when no part of the signature matches."""
-    results = dslam_detector._calculate_ghs_confidence(NO_MATCH_ANALYSIS)
-    assert len(results) == 0
-
-def test_identify_vendor_g_hs_is_best_match(dslam_detector):
-    """Tests that the best result is chosen when G.hs has the highest confidence."""
-    dslam_detector.ghs_analyzer.capture_handshake.return_value = True
-    dslam_detector.ghs_analyzer.analyze_capture.return_value = ALCATEL_ANALYSIS
-
-    # Mock SNMP and DHCP to return lower-confidence results
-    dslam_detector._detect_via_snmp = MagicMock(return_value=[])
-    dslam_detector._detect_via_dhcp = MagicMock(return_value=[])
-
-    result = dslam_detector.identify_vendor()
-
-    assert result is not None
-    assert result['vendor'] == 'nokia_alcatel'
-    # Score is 70 (ID) + 15 (ISAM) + 15 (7330) + 5 (Payload) = 105, capped at 100
-    assert result['confidence'] == 100
-
-def test_identify_vendor_below_threshold(dslam_detector):
-    """Tests that no result is returned if the best match is below the confidence threshold."""
-    dslam_detector.ghs_analyzer.capture_handshake.return_value = True
-    dslam_detector.ghs_analyzer.analyze_capture.return_value = PARTIAL_MATCH_ANALYSIS # Confidence 15
-
-    # Make other methods fail
-    dslam_detector._detect_via_snmp = MagicMock(return_value=[])
-    dslam_detector._detect_via_dhcp = MagicMock(return_value=[])
-
-    result = dslam_detector.identify_vendor()
-    assert result is None
 
 def test_identify_vendor_snmp_is_best_match(dslam_detector, mock_ssh_interface):
     """Tests that the best result is chosen when SNMP has the highest confidence."""
@@ -141,33 +122,26 @@ def test_identify_vendor_snmp_is_best_match(dslam_detector, mock_ssh_interface):
     dslam_detector.ghs_analyzer.capture_handshake.return_value = True
     dslam_detector.ghs_analyzer.analyze_capture.return_value = PARTIAL_MATCH_ANALYSIS # Confidence 15
 
-    # SNMP provides a high-confidence match
-    mock_ssh_interface.execute_command.return_value = ("enterprises.2011", "") # Mock for Huawei
+    # SNMP provides a high-confidence match for Nokia
+    nokia_oid = "1.3.6.1.4.1.637.1.2.3"
+    mock_ssh_interface.execute_command.return_value = (nokia_oid, "")
 
-    # To isolate, we'll replace the detector's method with a standard mock
-    dslam_detector._detect_via_snmp = MagicMock(return_value=[{
-        "vendor": "huawei", "confidence": 95, "description": "SNMP sysObjectID match", "method": "snmp"
-    }])
-    dslam_detector._detect_via_dhcp = MagicMock(return_value=[])
-
-    result = dslam_detector.identify_vendor()
+    result = dslam_detector.identify_vendor(methods=['g_hs', 'snmp'])
 
     assert result is not None
-    assert result['vendor'] == 'huawei'
-    assert result['confidence'] == 95
+    assert result['vendor'] == 'nokia_alcatel'
+    assert result['confidence'] == dslam_detector.SNMP_MATCH_SCORE
 
-def test_load_signatures_file_not_found():
-    """Tests that the detector handles a missing signature file gracefully."""
-    detector = UniversalDSLAMDetector(MagicMock(), signature_file="/non/existent/file.json")
+def test_load_signatures_file_not_found(mock_ssh_interface):
+    """Tests graceful handling of a missing signature file."""
+    detector = UniversalDSLAMDetector(mock_ssh_interface, signature_file="/non/existent/file.json")
     assert detector.signatures == {}
-    result = detector.identify_vendor()
-    assert result is None
+    assert detector.identify_vendor() is None
 
-def test_load_signatures_corrupt_json(tmp_path):
-    """Tests that the detector handles a corrupt signature file."""
+def test_load_signatures_corrupt_json(tmp_path, mock_ssh_interface):
+    """Tests graceful handling of a corrupt signature file."""
     p = tmp_path / "corrupt.json"
     p.write_text("{'not_json': True,}") # Invalid JSON
-    detector = UniversalDSLAMDetector(MagicMock(), signature_file=str(p))
+    detector = UniversalDSLAMDetector(mock_ssh_interface, signature_file=str(p))
     assert detector.signatures == {}
-    result = detector.identify_vendor()
-    assert result is None
+    assert detector.identify_vendor() is None

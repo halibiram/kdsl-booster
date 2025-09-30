@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
 
 # Configure logging
@@ -17,9 +18,11 @@ class UniversalDSLAMDetector:
     VENDOR_ID_MATCH_SCORE = 70
     VSI_PATTERN_MATCH_SCORE = 15
     PAYLOAD_MATCH_SCORE = 5
+    SNMP_MATCH_SCORE = 95
+    DHCP_MATCH_SCORE = 90
     CONFIDENCE_THRESHOLD = 50
 
-    def __init__(self, ssh_interface, signature_file='src/ghs_signatures.json'):
+    def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
         """
         Initializes the detector with an SSH interface for running commands.
 
@@ -92,17 +95,39 @@ class UniversalDSLAMDetector:
             return None
 
     def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
-        """Simulated SNMP detection, returning a result with high confidence."""
-        command = "echo 'SNMPv2-SMI::enterprises.2011 = STRING: \"Huawei\"'"
-        stdout, _ = self.ssh.execute_command(command)
-        if "2011" in stdout:
-            return [{
-                "vendor": "huawei",
-                "confidence": 95,
-                "description": "SNMP sysObjectID match",
-                "method": "snmp"
-            }]
+        """
+        Performs an SNMP get to find the vendor-specific sysObjectID.
+        """
+        # The sysObjectID OID is 1.3.6.1.2.1.1.2.0
+        oid_to_query = "1.3.6.1.2.1.1.2.0"
+        command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {oid_to_query}"
+        logging.info(f"Executing SNMP command: {command}")
+
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if not stdout or (stderr and "timeout" not in stderr.lower()):
+            logging.error(f"SNMP command failed or returned no output. stderr: {stderr}")
+            return []
+
+        # Example output: '1.3.6.1.4.1.2011.2.82.8'
+        # We just use the raw output as the OID
+        returned_oid = stdout.strip()
+        logging.info(f"SNMP returned OID: {returned_oid}")
+
+        for vendor, data in self.signatures.items():
+            snmp_sig = data.get('snmp', {})
+            if 'sysObjectID' in snmp_sig and returned_oid.startswith(snmp_sig['sysObjectID']):
+                logging.info(f"Matched SNMP OID for vendor: {vendor}")
+                return [{
+                    "vendor": vendor,
+                    "confidence": self.SNMP_MATCH_SCORE,
+                    "description": f"SNMP sysObjectID match ({returned_oid})",
+                    "method": "snmp"
+                }]
+
+        logging.warning("Returned SNMP OID did not match any known vendor.")
         return []
+
 
     def _detect_via_dhcp(self) -> list:
         """Simulated DHCP detection, returning a result with high confidence."""
@@ -111,7 +136,7 @@ class UniversalDSLAMDetector:
         if "ALIN" in stdout:
             return [{
                 "vendor": "nokia_alcatel",
-                "confidence": 90,
+                "confidence": self.DHCP_MATCH_SCORE,
                 "description": "DHCP Option 125 match",
                 "method": "dhcp"
             }]
@@ -120,13 +145,6 @@ class UniversalDSLAMDetector:
     def _calculate_ghs_confidence(self, analysis: dict) -> list:
         """
         Calculates confidence scores for vendors based on G.hs analysis.
-
-        Args:
-            analysis: The structured analysis result from GHSHandshakeAnalyzer.
-
-        Returns:
-            A list of dictionaries, each a potential vendor match with a
-            confidence score, sorted from most to least likely.
         """
         results = []
         if not analysis or not analysis.get('vendor_id'):
@@ -142,7 +160,8 @@ class UniversalDSLAMDetector:
             analyzed_vsi_str = ""
 
         for vendor, data in self.signatures.items():
-            for sig in data.get('signatures', []):
+            ghs_data = data.get('ghs', {})
+            for sig in ghs_data.get('signatures', []):
                 score = 0
                 # 1. Check for a strong match on Vendor ID
                 if sig.get('vendor_id') == analyzed_vendor_id:
@@ -172,9 +191,6 @@ class UniversalDSLAMDetector:
     def _detect_via_g_hs(self) -> list:
         """
         Identifies vendor by analyzing the G.hs handshake and scoring matches.
-
-        Returns:
-            A ranked list of potential vendor matches with confidence scores.
         """
         logging.info("Attempting to identify vendor via G.hs handshake analysis.")
 
