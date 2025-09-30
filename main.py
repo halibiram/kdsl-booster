@@ -10,6 +10,7 @@ It simulates a multi-method detection scenario for a Huawei DSLAM, covering:
 - Vectoring Detection
 - Bonding Detection
 - Frequency Capability Detection
+- Retransmission (G.inp) Detection
 """
 import logging
 import json
@@ -20,25 +21,29 @@ from src.vdsl_profile_analyzer import VDSLProfileAnalyzer
 from src.vectoring_analyzer import VectoringAnalyzer
 from src.bonding_analyzer import BondingAnalyzer
 from src.frequency_analyzer import FrequencyAnalyzer
+from src.retransmission_analyzer import RetransmissionAnalyzer
 
 # --- Mock Data Configuration ---
 HUAWEI_GHS_ANALYSIS = {
     "vendor_id": "HWTC", "vsi": b"MA5608T", "cl_message_payload": b"...",
     "handshake_duration": 195.0,
-    "vdsl2_profiles_bitmap": 81,  # 17a, 12a, 8a
-    "g_vector_bitmap": 1,         # G.vector supported
-    "bonding_bitmap": 3,          # G.998.1 (ATM) & G.998.2 (Ethernet)
-    "band_plan_id": 32            # ADLU-32 (Annex A, 17a)
+    "vdsl2_profiles_bitmap": 81,
+    "g_vector_bitmap": 1,
+    "bonding_bitmap": 3,
+    "band_plan_id": 32,
+    "g_inp_bitmap": 1  # G.inp supported
 }
 HUAWEI_SNMP_SYS_OID = "1.3.6.1.4.1.2011.2.82.8"
 HUAWEI_VDSL_PROFILES_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.20"
-HUAWEI_VDSL_PROFILES_RESPONSE = "Hex-STRING: 00 C0"  # 30a, 17a
+HUAWEI_VDSL_PROFILES_RESPONSE = "Hex-STRING: 00 C0"
 HUAWEI_VECTORING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.22"
-HUAWEI_VECTORING_STATUS_RESPONSE = "INTEGER: 1"  # Active
+HUAWEI_VECTORING_STATUS_RESPONSE = "INTEGER: 1"
 HUAWEI_BONDING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.8.1.1.1"
-HUAWEI_BONDING_STATUS_RESPONSE = "INTEGER: 1"  # Active
+HUAWEI_BONDING_STATUS_RESPONSE = "INTEGER: 1"
 HUAWEI_MAX_FREQUENCY_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.15"
-HUAWEI_MAX_FREQUENCY_RESPONSE = "INTEGER: 17664" # 17.664 MHz
+HUAWEI_MAX_FREQUENCY_RESPONSE = "INTEGER: 17664"
+HUAWEI_RETRANSMISSION_STATUS_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.25"
+HUAWEI_RETRANSMISSION_STATUS_RESPONSE = "INTEGER: 1" # Active
 HUAWEI_DNS_HOSTNAME = "dslam-ma5608t-london.huawei.isp.com"
 
 
@@ -48,6 +53,7 @@ def mock_snmp_executor(command: str) -> tuple[str, str]:
     if HUAWEI_VECTORING_STATUS_OID in command: return HUAWEI_VECTORING_STATUS_RESPONSE, ""
     if HUAWEI_BONDING_STATUS_OID in command: return HUAWEI_BONDING_STATUS_RESPONSE, ""
     if HUAWEI_MAX_FREQUENCY_OID in command: return HUAWEI_MAX_FREQUENCY_RESPONSE, ""
+    if HUAWEI_RETRANSMISSION_STATUS_OID in command: return HUAWEI_RETRANSMISSION_STATUS_RESPONSE, ""
     if "1.3.6.1.2.1.1.2.0" in command: return HUAWEI_SNMP_SYS_OID, ""
     return "", "Timeout"
 
@@ -71,6 +77,7 @@ def main():
     vectoring_analyzer = VectoringAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     bonding_analyzer = BondingAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     frequency_analyzer = FrequencyAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
+    retransmission_analyzer = RetransmissionAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     print("Components initialized successfully.")
 
     # --- 2. Mocking Detection Method Results ---
@@ -133,8 +140,19 @@ def main():
     else:
         print("❌ Frequency detection failed.")
 
-    # --- 8. Generate and Display Reports ---
-    print("\n[Step 8] Generating and displaying reports...")
+    # --- 8. Run Retransmission Detection ---
+    print("\n[Step 8] Running multi-method retransmission (G.inp) detection...")
+    retx_result = retransmission_analyzer.detect_all_retransmission_capabilities(vendor=vendor)
+    if retx_result:
+        supported = retx_result.get('g_inp_supported')
+        active = retx_result.get('is_active')
+        print(f"✅ G.inp detection complete. Supported: {supported}, Active: {active}")
+        vendor_result['capability_analysis']['retransmission'] = retx_result
+    else:
+        print("❌ G.inp detection failed.")
+
+    # --- 9. Generate and Display Reports ---
+    print("\n[Step 9] Generating and displaying reports...")
     report_generator = ReportGenerator(vendor_result)
 
     print("\n\n" + "="*20 + " TEXT REPORT " + "="*20)

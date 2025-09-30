@@ -97,6 +97,7 @@ class GHSHandshakeAnalyzer:
                 "g_vector_bitmap": cl_message.get("g_vector_bitmap"),
                 "bonding_bitmap": cl_message.get("bonding_bitmap"),
                 "band_plan_id": cl_message.get("band_plan_id"),
+                "g_inp_bitmap": cl_message.get("g_inp_bitmap"),
                 "full_analysis": cl_message
             })
         else:
@@ -117,7 +118,7 @@ class GHSHandshakeAnalyzer:
         parsed_data = {
             "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
             "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None,
-            "band_plan_id": None
+            "band_plan_id": None, "g_inp_bitmap": None
         }
         try:
             i = 1  # Start after message type
@@ -164,6 +165,15 @@ class GHSHandshakeAnalyzer:
                 if param_id == 0xA1 and i + 1 < len(payload):
                     bonding_bitmap |= (1 << 1) # Bit 1 for G.998.2
                     param_len = payload[i + 1]
+                    i += 1 + param_len
+                    continue
+
+                # G.998.4 G.inp/Retransmission (ID 0xB0)
+                if param_id == 0xB0 and i + 2 < len(payload):
+                    param_len = payload[i + 1]
+                    if param_len >= 1 and i + 2 + param_len <= len(payload):
+                        # The G.inp bitmap is typically the first byte of the value
+                        parsed_data["g_inp_bitmap"] = payload[i + 2]
                     i += 1 + param_len
                     continue
 
