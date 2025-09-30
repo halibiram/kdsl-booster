@@ -20,9 +20,6 @@ class GHSHandshakeAnalyzer:
     def __init__(self, ssh_interface):
         """
         Initializes the analyzer with an SSH interface for remote command execution.
-
-        Args:
-            ssh_interface: An active EntwareSSHInterface instance.
         """
         self.ssh = ssh_interface
         self.capture_file_path = "/tmp/ghs_capture.pcap"
@@ -30,35 +27,28 @@ class GHSHandshakeAnalyzer:
     def capture_handshake(self, interface: str = 'dsl0', duration: int = 15) -> bool:
         """
         Captures DSL handshake traffic from a given interface using tcpdump.
-
-        Args:
-            interface: The network interface to capture from (e.g., 'dsl0').
-            duration: The duration in seconds to capture traffic.
-
-        Returns:
-            True if capture was successful, False otherwise.
         """
         logging.info(f"Starting G.hs packet capture on {interface} for {duration} seconds.")
-        # The filter 'llc' is a common way to isolate G.hs frames.
         command = (
             f"tcpdump -i {interface} -w {self.capture_file_path} "
             f"-U -W 1 -G {duration} 'llc'"
         )
-        stdout, stderr = self.ssh.execute_command(command)
-
-        if stderr and "listening on" not in stderr.lower():
-            logging.error(f"Error during tcpdump execution: {stderr}")
+        try:
+            _, stderr = self.ssh.execute_command(command)
+            # tcpdump logs its status to stderr, so we check for common success messages.
+            if stderr and "listening on" not in stderr.lower() and "packets captured" not in stderr.lower():
+                logging.warning(f"tcpdump for G.hs returned an error or unexpected output: {stderr.strip()}")
+                return False
+        except Exception as e:
+            logging.error(f"An exception occurred while executing G.hs tcpdump: {e}", exc_info=True)
             return False
 
-        logging.info(f"Packet capture completed. Data saved to {self.capture_file_path} on the remote device.")
+        logging.info("G.hs packet capture completed.")
         return True
 
     def analyze_capture(self) -> dict:
         """
         Downloads and analyzes the captured pcap file to extract handshake details.
-
-        Returns:
-            A dictionary containing parsed G.hs messages and extracted capabilities.
         """
         logging.info(f"Downloading capture file: {self.capture_file_path}")
         local_pcap_path = "ghs_capture.pcap"
@@ -76,80 +66,85 @@ class GHSHandshakeAnalyzer:
             logging.error(f"Scapy failed to read pcap file {local_pcap_path}: {e}")
             return {}
 
+        ghs_packets = [p for p in packets if 'LLC' in p]
+        if not ghs_packets:
+            logging.warning("No G.hs (LLC) packets found in capture.")
+            return {}
+
+        # Calculate handshake duration
+        first_packet_time = ghs_packets[0].time
+        last_packet_time = ghs_packets[-1].time
+        duration_seconds = float(last_packet_time - first_packet_time)
+        handshake_duration_ms = duration_seconds * 1000
+        logging.info(f"Calculated handshake duration: {handshake_duration_ms:.2f} ms")
+
         parsed_messages = []
-        full_handshake_signature = b''
+        for pkt in ghs_packets:
+            payload = bytes(pkt['LLC'].payload)
+            msg = self._parse_ghs_message(payload)
+            if msg:
+                parsed_messages.append(msg)
 
-        for pkt in packets:
-            if 'LLC' in pkt:
-                payload = bytes(pkt['LLC'].payload)
-                full_handshake_signature += payload
-                msg = self._parse_ghs_message(payload)
-                if msg:
-                    parsed_messages.append(msg)
+        cl_message = self._extract_cl_message(parsed_messages)
+        analysis_results = {"handshake_duration": handshake_duration_ms}
 
-        # For vendor identification, the initial CL message from the DSLAM is often unique
-        vendor_signature = self._extract_cl_message_payload(parsed_messages)
-
-        analysis_results = {
-            "messages": parsed_messages,
-            "capabilities": self._extract_capabilities(parsed_messages),
-            "vendor_signature": vendor_signature
-        }
+        if cl_message:
+            analysis_results.update({
+                "cl_message_payload": cl_message.get("payload"),
+                "vendor_id": cl_message.get("vendor_id"),
+                "vsi": cl_message.get("vsi"),
+                "full_analysis": cl_message
+            })
+        else:
+            logging.warning("No CL message found in G.hs packets.")
 
         return analysis_results
 
     def _parse_ghs_message(self, payload: bytes) -> dict | None:
         """
-        Parses a raw G.hs message payload.
-
-        This is a simplified parser focusing on identifying message types and parameters.
-        G.hs messages are complex; this parser looks for key identifiers.
-
-        Args:
-            payload: The raw bytes of the G.hs message.
-
-        Returns:
-            A dictionary with the parsed message, or None if it's not a recognized type.
+        Parses a raw G.994.1 message payload into a structured format.
+        This has been hardened against malformed payloads.
         """
-        # G.hs messages are typically identified by the first few bytes.
-        # This is a simplified identification scheme.
-        if payload.startswith(b'\x01'):
-            msg_type = 'CLR' # Client Request
-        elif payload.startswith(b'\x02'):
-            msg_type = 'CL'  # Capabilities List (from DSLAM)
-        elif payload.startswith(b'\x03'):
-            msg_type = 'MS'  # Mode Select
-        elif payload.startswith(b'\x04'):
-            msg_type = 'ACK'
-        else:
-            return None # Not a message type we are parsing
+        if not payload: return None
+        msg_type_map = {1: 'CLR', 2: 'CL', 3: 'MS', 4: 'ACK'}
+        msg_type = msg_type_map.get(payload[0])
+        if not msg_type: return None
 
-        # The rest of the payload contains parameters, often in TLV format.
-        # For this simulation, we'll just store the raw parameters block.
-        parameters = payload[1:]
+        parsed_data = {"type": msg_type, "payload": payload, "vendor_id": None, "vsi": None}
+        try:
+            # Start search for NSIF marker (0x91) after the first byte.
+            i = 1
+            while i < len(payload):
+                if payload[i] == 0x91:
+                    # Found the NSIF marker. Check for length byte.
+                    if i + 1 < len(payload):
+                        param_len = payload[i + 1]
+                        nsif_data_start = i + 2
+                        # Check if the full parameter is within the payload bounds.
+                        if nsif_data_start + param_len <= len(payload):
+                            nsif_data = payload[nsif_data_start : nsif_data_start + param_len]
+                            # NSIF must have at least 6 bytes for country code + vendor ID.
+                            if len(nsif_data) >= 6:
+                                parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
+                                parsed_data["vsi"] = nsif_data[6:]
+                            # Break after finding the first valid NSIF.
+                            break
+                        else:
+                            # Malformed length, stop parsing.
+                            break
+                    else:
+                        # Marker found at the very end, malformed.
+                        break
+                i += 1 # Move to the next byte to search for the marker.
+        except Exception as e:
+            # Catch any other unexpected parsing errors.
+            logging.warning(f"Unexpected error while parsing G.hs message: {e}")
 
-        return {"type": msg_type, "payload": payload, "parameters": parameters}
+        return parsed_data
 
-    def _extract_cl_message_payload(self, messages: list) -> bytes:
-        """Finds the first CL message and returns its payload for signature matching."""
+    def _extract_cl_message(self, messages: list) -> dict | None:
+        """Finds the first CL message and returns its parsed dictionary."""
         for msg in messages:
             if msg['type'] == 'CL':
-                return msg['payload']
-        return b''
-
-    def _extract_capabilities(self, messages: list) -> dict:
-        """
-        Extracts key capabilities from the parsed G.hs messages.
-        This focuses on the 'CL' (Capabilities List) from the DSLAM.
-        """
-        capabilities = {}
-        for msg in messages:
-            if msg['type'] == 'CL':
-                # This is a placeholder for a more detailed parser.
-                # A real implementation would parse the TLV parameters.
-                # For example, check for bits indicating VDSL2 profile support.
-                if b'\x81' in msg['parameters']: # Example: Parameter for VDSL2 profiles
-                    capabilities['VDSL2_Profiles'] = "Detected"
-                if b'\x82' in msg['parameters']: # Example: Parameter for Vectoring
-                    capabilities['Vectoring'] = "Detected"
-        return capabilities
+                return msg
+        return None

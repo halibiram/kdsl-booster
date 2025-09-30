@@ -1,5 +1,11 @@
 import logging
+import json
+import re
+from collections import defaultdict
 from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
+from src.dhcp_analyzer import DHCPAnalyzer
+from src.dns_analyzer import DNSAnalyzer
+from src.tr069_analyzer import TR069Analyzer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -7,129 +13,199 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class UniversalDSLAMDetector:
     """
     A multi-method engine for detecting the vendor of a DSLAM.
-
-    This class uses a collection of signatures and methods to make an educated
-    guess about the DSLAM hardware the user is connected to. This information
-    is critical for tailoring vendor-specific exploits.
     """
-
-    # A database of known signatures for different DSLAM vendors.
-    # This would be expanded over time with more research.
-    VENDOR_SIGNATURES = {
-        'huawei': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.2011',
-            'g_hs_pattern': b'\x02\x01\x00\x93\x11\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'HWON'
-        },
-        'nokia': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.637',
-            'g_hs_pattern': b'\x02\x01\x00\x85\x07\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'ALIN'
-        },
-        'zte': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.3902',
-            'g_hs_pattern': b'\x02\x01\x00\x78\x22\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'ZTE'
-        }
+    # Formal weighting scheme as per Task 7
+    METHOD_WEIGHTS = {
+        "g_hs": 35,
+        "snmp": 30,
+        "dhcp": 20,
+        "dns": 10,
+        "tr069": 4,
+        "timing": 1,
     }
+    # Certainty scores for sub-findings within a method
+    GHS_VENDOR_ID_CERTAINTY = 70
+    GHS_VSI_CERTAINTY = 25
+    DNS_VENDOR_CERTAINTY = 80
+    DNS_MODEL_CERTAINTY = 20
+    # A final score must be above this threshold to be considered a valid result.
+    FINAL_CONFIDENCE_THRESHOLD = 10
 
-    def __init__(self, ssh_interface):
+    def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
         """
         Initializes the detector with an SSH interface for running commands.
-
-        Args:
-            ssh_interface: An active EntwareSSHInterface instance.
         """
         self.ssh = ssh_interface
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
+        self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
+        self.dns_analyzer = DNSAnalyzer()
+        self.tr069_analyzer = TR069Analyzer(ssh_interface)
+        self.signatures = self._load_signatures(signature_file)
         self.detection_methods = {
+            'g_hs': self._detect_via_g_hs,
             'snmp': self._detect_via_snmp,
             'dhcp': self._detect_via_dhcp,
-            'g_hs': self._detect_via_g_hs,
+            'dns': self._detect_via_dns,
+            'tr069': self._detect_via_tr069,
+            'timing': self._detect_via_timing,
         }
 
-    def identify_vendor(self, methods: list = ['snmp', 'dhcp', 'g_hs']) -> str | None:
-        """
-        Attempts to identify the DSLAM vendor using a list of specified methods.
+    def _load_signatures(self, signature_file: str) -> dict:
+        """Loads vendor signatures from a JSON file."""
+        try:
+            with open(signature_file, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to load signatures from {signature_file}: {e}")
+            return {}
 
-        Args:
-            methods: A list of detection methods to try, in order.
-
-        Returns:
-            The name of the detected vendor (e.g., 'huawei') or None if no
-            match is found.
+    def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp', 'dns', 'tr069', 'timing']) -> dict | None:
         """
-        logging.info(f"Starting DSLAM vendor identification using methods: {methods}")
+        Runs all specified detection methods, correlates the results, and returns the
+        most likely vendor if the confidence exceeds a threshold.
+        """
+        if not self.signatures:
+            logging.error("Signature database is empty. Cannot perform detection.")
+            return None
+
+        all_findings = []
         for method_name in methods:
             if method_name in self.detection_methods:
                 logging.info(f"Attempting detection via {method_name}...")
-                vendor = self.detection_methods[method_name]()
-                if vendor:
-                    logging.info(f"Vendor identified as '{vendor}' using {method_name}.")
-                    return vendor
+                findings = self.detection_methods[method_name]()
+                if findings:
+                    all_findings.extend(findings)
             else:
                 logging.warning(f"Detection method '{method_name}' not implemented.")
 
-        logging.warning("Could not identify DSLAM vendor with the specified methods.")
-        return None
-
-    def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> str | None:
-        """
-        Performs an SNMP walk to find a vendor-specific OID.
-        (This is a simulation as we cannot perform real network requests).
-        """
-        # In a real implementation, this would use snmpwalk.
-        # For this simulation, we'll assume a command that returns a known OID.
-        command = f"echo 'SNMPv2-SMI::enterprises.2011 = STRING: \"Huawei\"'" # Mocked command
-        stdout, _ = self.ssh.execute_command(command)
-
-        if stdout:
-            for vendor, signatures in self.VENDOR_SIGNATURES.items():
-                if signatures['snmp_oid_pattern'] in stdout:
-                    return vendor
-        return None
-
-    def _detect_via_dhcp(self) -> str | None:
-        """
-        Inspects DHCP client leases for vendor-specific options (e.g., Option 125).
-        (This is a simulation).
-        """
-        # This would typically involve parsing /tmp/dhcp.leases or similar.
-        command = "echo 'vendor-class-identifier \"ALIN\"'" # Mocked command for Nokia
-        stdout, _ = self.ssh.execute_command(command)
-
-        if stdout:
-            for vendor, signatures in self.VENDOR_SIGNATURES.items():
-                if signatures['dhcp_option_125'] and signatures['dhcp_option_125'] in stdout:
-                    return vendor
-        return None
-
-    def _detect_via_g_hs(self) -> str | None:
-        """
-        Identifies the vendor by analyzing the G.hs handshake.
-
-        This method orchestrates the capture and analysis of G.hs packets
-        and matches the result against a database of known vendor signatures.
-        """
-        logging.info("Attempting to identify vendor via G.hs handshake analysis.")
-
-        # In a real scenario, we might need to trigger a modem retrain to capture
-        # the handshake. For this simulation, we assume a capture is possible.
-        if not self.ghs_analyzer.capture_handshake():
-            logging.error("Failed to capture G.hs handshake. Aborting G.hs detection.")
+        if not all_findings:
+            logging.warning("Could not identify DSLAM vendor with the specified methods.")
             return None
 
+        vendor_scores = defaultdict(float)
+        vendor_evidence = defaultdict(list)
+
+        for finding in all_findings:
+            vendor = finding['vendor']
+            method = finding['method']
+            certainty = finding['certainty']
+            weight = self.METHOD_WEIGHTS.get(method, 0)
+            score = (certainty / 100.0) * weight
+            vendor_scores[vendor] += score
+            vendor_evidence[vendor].append(finding)
+
+        if not vendor_scores:
+            logging.warning("No vendor matched any signature.")
+            return None
+
+        sorted_vendors = sorted(vendor_scores.items(), key=lambda item: item[1], reverse=True)
+
+        if len(sorted_vendors) > 1:
+            top_vendor, top_score = sorted_vendors[0]
+            second_vendor, second_score = sorted_vendors[1]
+            if top_score > 30 and (top_score - second_score) < 10:
+                logging.warning(
+                    f"Conflict detected: High confidence in multiple vendors. "
+                    f"Top: {top_vendor} ({top_score:.2f}%) with evidence: {vendor_evidence[top_vendor]}. "
+                    f"Second: {second_vendor} ({second_score:.2f}%) with evidence: {vendor_evidence[second_vendor]}."
+                )
+
+        best_vendor, best_score = sorted_vendors[0]
+
+        if best_score < self.FINAL_CONFIDENCE_THRESHOLD:
+            logging.warning(
+                f"Best match '{best_vendor}' with score {best_score:.2f}% "
+                f"did not meet the final confidence threshold of {self.FINAL_CONFIDENCE_THRESHOLD}%."
+            )
+            return None
+
+        return {
+            "primary_vendor": best_vendor,
+            "overall_confidence": min(round(best_score, 2), 100.0),
+            "contributing_methods": vendor_evidence[best_vendor],
+            "all_results": {vendor: round(score, 2) for vendor, score in sorted_vendors}
+        }
+
+    def _detect_via_g_hs(self) -> list:
         analysis = self.ghs_analyzer.analyze_capture()
-        if not analysis or not analysis.get('vendor_signature'):
-            logging.warning("G.hs analysis did not yield a vendor signature.")
-            return None
+        if not analysis or 'vendor_id' not in analysis: return []
 
-        signature = analysis['vendor_signature']
-        logging.info(f"G.hs analysis yielded signature: {signature.hex()}")
+        findings = []
+        analyzed_vendor_id = analysis['vendor_id']
+        analyzed_vsi = analysis.get('vsi', b'').decode('ascii', errors='ignore')
+        for vendor, data in self.signatures.items():
+            ghs_data = data.get('ghs', {})
+            for sig in ghs_data.get('signatures', []):
+                certainty = 0
+                if sig.get('vendor_id') == analyzed_vendor_id: certainty += self.GHS_VENDOR_ID_CERTAINTY
+                for pattern in sig.get('vsi_patterns', []):
+                    if pattern in analyzed_vsi: certainty += self.GHS_VSI_CERTAINTY
+                if certainty > 0:
+                    findings.append({"vendor": vendor, "certainty": min(certainty, 100), "method": "g_hs", "raw_data": f"VSI: {analyzed_vsi}"})
+        return findings
 
-        for vendor, signatures in self.VENDOR_SIGNATURES.items():
-            if signatures['g_hs_pattern'] and signature.startswith(signatures['g_hs_pattern']):
-                return vendor
+    def _detect_via_timing(self) -> list:
+        analysis = self.ghs_analyzer.analyze_capture()
+        if not analysis or "handshake_duration" not in analysis: return []
+        duration = analysis["handshake_duration"]
 
-        logging.warning("G.hs signature did not match any known vendor.")
-        return None
+        findings = []
+        for vendor, data in self.signatures.items():
+            timing_sig = data.get('timing', {}).get('handshake_duration_ms', {})
+            if timing_sig and timing_sig.get('min') <= duration <= timing_sig.get('max'):
+                findings.append({"vendor": vendor, "certainty": 100, "method": "timing", "raw_data": f"{duration:.2f}ms"})
+        return findings
+
+    def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
+        oid_to_query = "1.3.6.1.2.1.1.2.0"
+        command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {oid_to_query}"
+        try:
+            stdout, stderr = self.ssh.execute_command(command)
+            if not stdout or (stderr and "timeout" not in stderr.lower()):
+                if stderr: logging.warning(f"SNMP command execution failed or returned an error: {stderr.strip()}")
+                return []
+        except Exception as e:
+            logging.error(f"An exception occurred while executing SNMP command: {e}", exc_info=True)
+            return []
+
+        returned_oid = stdout.strip()
+        for vendor, data in self.signatures.items():
+            snmp_sig = data.get('snmp', {})
+            if 'sysObjectID' in snmp_sig and returned_oid.startswith(snmp_sig['sysObjectID']):
+                return [{"vendor": vendor, "certainty": 100, "method": "snmp", "raw_data": returned_oid}]
+        return []
+
+    def _detect_via_dhcp(self) -> list:
+        analysis = self.dhcp_analyzer.capture_and_analyze()
+        if not analysis or 'circuit_id' not in analysis: return []
+        circuit_id_str = analysis['circuit_id'].decode('ascii', errors='ignore')
+        for vendor, data in self.signatures.items():
+            dhcp_sig = data.get('dhcp', {})
+            if 'circuit_id_pattern' in dhcp_sig and re.match(dhcp_sig['circuit_id_pattern'], circuit_id_str):
+                return [{"vendor": vendor, "certainty": 100, "method": "dhcp", "raw_data": circuit_id_str}]
+        return []
+
+    def _detect_via_dns(self, target_ip: str = '8.8.8.8') -> list:
+        hostname = self.dns_analyzer.get_hostname_by_ip(target_ip)
+        if not hostname: return []
+        findings = []
+        hostname_lower = hostname.lower()
+        for vendor, data in self.signatures.items():
+            dns_sig = data.get('dns', {})
+            certainty = 0
+            if any(re.search(p, hostname_lower) for p in dns_sig.get('vendor_patterns', [])): certainty += self.DNS_VENDOR_CERTAINTY
+            if any(re.search(p, hostname_lower) for p in dns_sig.get('model_patterns', [])): certainty += self.DNS_MODEL_CERTAINTY
+            if certainty > 0:
+                findings.append({"vendor": vendor, "certainty": certainty, "method": "dns", "raw_data": hostname})
+        return findings
+
+    def _detect_via_tr069(self) -> list:
+        analysis = self.tr069_analyzer.capture_and_analyze()
+        if not analysis or 'manufacturer' not in analysis: return []
+        manufacturer = analysis['manufacturer']
+        for vendor, data in self.signatures.items():
+            tr069_sig = data.get('tr069', {})
+            for pattern in tr069_sig.get('manufacturer_patterns', []):
+                if re.search(pattern, manufacturer, re.IGNORECASE):
+                    return [{"vendor": vendor, "certainty": 100, "method": "tr069", "raw_data": manufacturer}]
+        return []

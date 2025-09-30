@@ -1,0 +1,153 @@
+{
+    "huawei": {
+        "snmp": {
+            "sysObjectID": "1.3.6.1.4.1.2011"
+        },
+        "dhcp": {
+            "circuit_id_pattern": "^([0-9a-fA-F]{2}/){4}[0-9a-fA-F]{2}$"
+        },
+        "dns": {
+            "vendor_patterns": ["huawei"],
+            "model_patterns": ["ma5600", "ma5608", "ma5680"]
+        },
+        "tr069": {
+            "manufacturer_patterns": ["Huawei", "HWTC"],
+            "acs_url_patterns": ["/acs", "/tr069"]
+        },
+        "timing": {
+            "handshake_duration_ms": {"min": 180, "max": 220}
+        },
+        "ghs": {
+            "signatures": [
+                {
+                    "description": "MA5608T - Standard Firmware",
+                    "vendor_id": "HWTC",
+                    "cl_payload_pattern": "020100931101",
+                    "vsi_patterns": ["MA5608T"]
+                },
+                {
+                    "description": "MA5680T - European Firmware",
+                    "vendor_id": "HWTC",
+                    "cl_payload_pattern": "020100931102",
+                    "vsi_patterns": ["MA5680T"]
+                }
+            ]
+        }
+    },
+    "nokia_alcatel": {
+        "snmp": {
+            "sysObjectID": "1.3.6.1.4.1.637"
+        },
+        "dhcp": {
+            "circuit_id_pattern": "^ATM [0-9]+:[0-9]+:[0-9]+:[0-9]+$"
+        },
+        "dns": {
+            "vendor_patterns": ["nokia", "alcatel", "alu"],
+            "model_patterns": ["7330", "7302", "isam"]
+        },
+        "tr069": {
+            "manufacturer_patterns": ["Nokia", "Alcatel-Lucent", "ALCL"],
+            "acs_url_patterns": ["/cwmp"]
+        },
+        "timing": {
+            "handshake_duration_ms": {"min": 200, "max": 250}
+        },
+        "ghs": {
+            "signatures": [
+                {
+                    "description": "7330 ISAM - Generic",
+                    "vendor_id": "ALCL",
+                    "cl_payload_pattern": "020100850701",
+                    "vsi_patterns": ["ISAM", "7330"]
+                },
+                {
+                    "description": "Stinger LIM",
+                    "vendor_id": "ALCL",
+                    "cl_payload_pattern": "020100850702",
+                    "vsi_patterns": ["STINGER"]
+                }
+            ]
+        }
+    },
+    "zte": {
+        "snmp": {
+            "sysObjectID": "1.3.6.1.4.1.3902"
+        },
+        "dhcp": {
+            "circuit_id_pattern": "^.+ shelf/[0-9]+ slot/[0-9]+ port/[0-9]+.*$"
+        },
+        "dns": {
+            "vendor_patterns": ["zte"],
+            "model_patterns": ["c320", "zxa10"]
+        },
+        "tr069": {
+            "manufacturer_patterns": ["ZTE", "ZTEG"],
+            "acs_url_patterns": ["/acs"]
+        },
+        "timing": {
+            "handshake_duration_ms": {"min": 150, "max": 180}
+        },
+        "ghs": {
+            "signatures": [
+                {
+                    "description": "ZXA10 C320",
+                    "vendor_id": "ZTEG",
+                    "cl_payload_pattern": "020100782201",
+                    "vsi_patterns": ["ZXA10", "C320"]
+                }
+            ]
+        }
+    },
+    "adtran": {
+        "snmp": { "sysObjectID": "1.3.6.1.4.1.664" },
+        "dns": { "vendor_patterns": ["adtran"], "model_patterns": ["ta5000"] },
+        "ghs": { "signatures": [ { "description": "Total Access 5000", "vendor_id": "ADTN", "cl_payload_pattern": "020100614401", "vsi_patterns": ["TA5000"] } ] }
+    },
+    "calix": {
+        "snmp": { "sysObjectID": "1.3.6.1.4.1.6321" },
+        "dns": { "vendor_patterns": ["calix"], "model_patterns": ["e7"] },
+        "ghs": { "signatures": [ { "description": "E7 Series", "vendor_id": "CALX", "cl_payload_pattern": "020100632101", "vsi_patterns": ["E7"] } ] }
+    },
+    "broadcom": { "ghs": { "signatures": [ { "description": "Generic Broadcom Chipset", "vendor_id": "BDCM", "cl_payload_pattern": "020100FFFF01", "vsi_patterns": ["BCM"] } ] } },
+    "lantiq": { "ghs": { "signatures": [ { "description": "Generic Lantiq/Intel Chipset", "vendor_id": "LNTQ", "cl_payload_pattern": "020100FFFF02", "vsi_patterns": ["VRX"] } ] } },
+    "placeholder_vendor_1": { "ghs": {"signatures": [{ "description": "Placeholder 1", "vendor_id": "PLH1", "cl_payload_pattern": "020100FFFF03", "vsi_patterns": [] }] }},
+    "placeholder_vendor_2": { "ghs": {"signatures": [{ "description": "Placeholder 2", "vendor_id": "PLH2", "cl_payload_pattern": "020100FFFF04", "vsi_patterns": [] }] }},
+    "placeholder_vendor_3": { "ghs": {"signatures": [{ "description": "Placeholder 3", "vendor_id": "PLH3", "cl_payload_pattern": "020100FFFF05", "vsi_patterns": [] }] }},
+    "placeholder_vendor_4": { "ghs": {"signatures": [{ "description": "Placeholder 4", "vendor_id": "PLH4", "cl_payload_pattern": "020100FFFF06", "vsi_patterns": [] }] }},
+    "placeholder_vendor_5": { "ghs": {"signatures": [{ "description": "Placeholder 5", "vendor_id": "PLH5", "cl_payload_pattern": "020100FFFF07", "vsi_patterns": [] }] }},
+    "placeholder_vendor_6": { "ghs": {"signatures": [{ "description": "Placeholder 6", "vendor_id": "PLH6", "cl_payload_pattern": "020100FFFF08", "vsi_patterns": [] }] }},
+    "placeholder_vendor_7": { "ghs": {"signatures": [{ "description": "Placeholder 7", "vendor_id": "PLH7", "cl_payload_pattern": "020100FFFF09", "vsi_patterns": [] }] }},
+    "placeholder_vendor_8": { "ghs": {"signatures": [{ "description": "Placeholder 8", "vendor_id": "PLH8", "cl_payload_pattern": "020100FFFF0A", "vsi_patterns": [] }] }},
+    "placeholder_vendor_9": { "ghs": {"signatures": [{ "description": "Placeholder 9", "vendor_id": "PLH9", "cl_payload_pattern": "020100FFFF0B", "vsi_patterns": [] }] }},
+    "placeholder_vendor_10": { "ghs": {"signatures": [{ "description": "Placeholder 10", "vendor_id": "PLHA", "cl_payload_pattern": "020100FFFF0C", "vsi_patterns": [] }] }},
+    "placeholder_vendor_11": { "ghs": {"signatures": [{ "description": "Placeholder 11", "vendor_id": "PLHB", "cl_payload_pattern": "020100FFFF0D", "vsi_patterns": [] }] }},
+    "placeholder_vendor_12": { "ghs": {"signatures": [{ "description": "Placeholder 12", "vendor_id": "PLHC", "cl_payload_pattern": "020100FFFF0E", "vsi_patterns": [] }] }},
+    "placeholder_vendor_13": { "ghs": {"signatures": [{ "description": "Placeholder 13", "vendor_id": "PLHD", "cl_payload_pattern": "020100FFFF0F", "vsi_patterns": [] }] }},
+    "placeholder_vendor_14": { "ghs": {"signatures": [{ "description": "Placeholder 14", "vendor_id": "PLHE", "cl_payload_pattern": "020100FFFF10", "vsi_patterns": [] }] }},
+    "placeholder_vendor_15": { "ghs": {"signatures": [{ "description": "Placeholder 15", "vendor_id": "PLHF", "cl_payload_pattern": "020100FFFF11", "vsi_patterns": [] }] }},
+    "placeholder_vendor_16": { "ghs": {"signatures": [{ "description": "Placeholder 16", "vendor_id": "PLHG", "cl_payload_pattern": "020100FFFF12", "vsi_patterns": [] }] }},
+    "placeholder_vendor_17": { "ghs": {"signatures": [{ "description": "Placeholder 17", "vendor_id": "PLHH", "cl_payload_pattern": "020100FFFF13", "vsi_patterns": [] }] }},
+    "placeholder_vendor_18": { "ghs": {"signatures": [{ "description": "Placeholder 18", "vendor_id": "PLHI", "cl_payload_pattern": "020100FFFF14", "vsi_patterns": [] }] }},
+    "placeholder_vendor_19": { "ghs": {"signatures": [{ "description": "Placeholder 19", "vendor_id": "PLHJ", "cl_payload_pattern": "020100FFFF15", "vsi_patterns": [] }] }},
+    "placeholder_vendor_20": { "ghs": {"signatures": [{ "description": "Placeholder 20", "vendor_id": "PLHK", "cl_payload_pattern": "020100FFFF16", "vsi_patterns": [] }] }},
+    "placeholder_vendor_21": { "ghs": {"signatures": [{ "description": "Placeholder 21", "vendor_id": "PLHL", "cl_payload_pattern": "020100FFFF17", "vsi_patterns": [] }] }},
+    "placeholder_vendor_22": { "ghs": {"signatures": [{ "description": "Placeholder 22", "vendor_id": "PLHM", "cl_payload_pattern": "020100FFFF18", "vsi_patterns": [] }] }},
+    "placeholder_vendor_23": { "ghs": {"signatures": [{ "description": "Placeholder 23", "vendor_id": "PLHN", "cl_payload_pattern": "020100FFFF19", "vsi_patterns": [] }] }},
+    "placeholder_vendor_24": { "ghs": {"signatures": [{ "description": "Placeholder 24", "vendor_id": "PLHO", "cl_payload_pattern": "020100FFFF1A", "vsi_patterns": [] }] }},
+    "placeholder_vendor_25": { "ghs": {"signatures": [{ "description": "Placeholder 25", "vendor_id": "PLHP", "cl_payload_pattern": "020100FFFF1B", "vsi_patterns": [] }] }},
+    "placeholder_vendor_26": { "ghs": {"signatures": [{ "description": "Placeholder 26", "vendor_id": "PLHQ", "cl_payload_pattern": "020100FFFF1C", "vsi_patterns": [] }] }},
+    "placeholder_vendor_27": { "ghs": {"signatures": [{ "description": "Placeholder 27", "vendor_id": "PLHR", "cl_payload_pattern": "020100FFFF1D", "vsi_patterns": [] }] }},
+    "placeholder_vendor_28": { "ghs": {"signatures": [{ "description": "Placeholder 28", "vendor_id": "PLHS", "cl_payload_pattern": "020100FFFF1E", "vsi_patterns": [] }] }},
+    "placeholder_vendor_29": { "ghs": {"signatures": [{ "description": "Placeholder 29", "vendor_id": "PLHT", "cl_payload_pattern": "020100FFFF1F", "vsi_patterns": [] }] }},
+    "placeholder_vendor_30": { "ghs": {"signatures": [{ "description": "Placeholder 30", "vendor_id": "PLHU", "cl_payload_pattern": "020100FFFF20", "vsi_patterns": [] }] }},
+    "placeholder_vendor_31": { "ghs": {"signatures": [{ "description": "Placeholder 31", "vendor_id": "PLHV", "cl_payload_pattern": "020100FFFF21", "vsi_patterns": [] }] }},
+    "placeholder_vendor_32": { "ghs": {"signatures": [{ "description": "Placeholder 32", "vendor_id": "PLHW", "cl_payload_pattern": "020100FFFF22", "vsi_patterns": [] }] }},
+    "placeholder_vendor_33": { "ghs": {"signatures": [{ "description": "Placeholder 33", "vendor_id": "PLHX", "cl_payload_pattern": "020100FFFF23", "vsi_patterns": [] }] }},
+    "placeholder_vendor_34": { "ghs": {"signatures": [{ "description": "Placeholder 34", "vendor_id": "PLHY", "cl_payload_pattern": "020100FFFF24", "vsi_patterns": [] }] }},
+    "placeholder_vendor_35": { "ghs": {"signatures": [{ "description": "Placeholder 35", "vendor_id": "PLHZ", "cl_payload_pattern": "020100FFFF25", "vsi_patterns": [] }] }},
+    "placeholder_vendor_36": { "ghs": {"signatures": [{ "description": "Placeholder 36", "vendor_id": "PLI0", "cl_payload_pattern": "020100FFFF26", "vsi_patterns": [] }] }},
+    "placeholder_vendor_37": { "ghs": {"signatures": [{ "description": "Placeholder 37", "vendor_id": "PLI1", "cl_payload_pattern": "020100FFFF27", "vsi_patterns": [] }] }},
+    "placeholder_vendor_38": { "ghs": {"signatures": [{ "description": "Placeholder 38", "vendor_id": "PLI2", "cl_payload_pattern": "020100FFFF28", "vsi_patterns": [] }] }},
+    "placeholder_vendor_39": { "ghs": {"signatures": [{ "description": "Placeholder 39", "vendor_id": "PLI3", "cl_payload_pattern": "020100FFFF29", "vsi_patterns": [] }] }},
+    "placeholder_vendor_40": { "ghs": {"signatures": [{ "description": "Placeholder 40", "vendor_id": "PLI4", "cl_payload_pattern": "020100FFFF2A", "vsi_patterns": [] }] }}
+}
