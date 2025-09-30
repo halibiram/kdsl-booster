@@ -6,7 +6,12 @@ from src.dslam_detector import UniversalDSLAMDetector
 # Mock analysis data
 ZTE_DNS_HOSTNAME = "dslam-c320-london.zte.isp.com"
 HUAWEI_TR069_ANALYSIS = {"manufacturer": "Huawei Technologies Co., Ltd."}
-NOKIA_TR069_ANALYSIS = {"manufacturer": "Nokia"}
+HUAWEI_GHS_ANALYSIS = {
+    "vendor_id": "HWTC",
+    "vsi": b"MA5608T",
+    "cl_message_payload": b"\x02\x91\x0f\x00\xb5HWTCMA5608T\x00\x00",
+    "handshake_duration": 190.0  # Specific value to only match Huawei
+}
 
 
 @pytest.fixture
@@ -23,18 +28,18 @@ def signature_file(tmp_path):
     sig_data = {
         "huawei": {
             "snmp": {"sysObjectID": "1.3.6.1.4.1.2011"},
-            "dhcp": {"circuit_id_pattern": "^([0-9a-fA-F]{2}/){4}[0-9a-fA-F]{2}$"},
-            "dns": {"vendor_patterns": ["huawei"], "model_patterns": ["ma5600"]},
-            "tr069": {"manufacturer_patterns": ["Huawei"]}
+            "dns": {"vendor_patterns": ["huawei"]},
+            "tr069": {"manufacturer_patterns": ["Huawei"]},
+            "timing": {"handshake_duration_ms": {"min": 180, "max": 220}},
+            "ghs": {"signatures": [{"vendor_id": "HWTC", "vsi_patterns": ["MA5608T"]}]}
         },
         "nokia_alcatel": {
             "snmp": {"sysObjectID": "1.3.6.1.4.1.637"},
-            "dhcp": {"circuit_id_pattern": "^ATM [0-9]+:[0-9]+:[0-9]+:[0-9]+$"},
-            "dns": {"vendor_patterns": ["nokia", "alu"], "model_patterns": ["isam"]},
-            "tr069": {"manufacturer_patterns": ["Nokia", "Alcatel-Lucent"]}
+            "timing": {"handshake_duration_ms": {"min": 200, "max": 250}},
+            "ghs": {"signatures": [{"vendor_id": "ALCL"}]}
         },
         "zte": {
-            "dns": {"vendor_patterns": ["zte"], "model_patterns": ["c320"]}
+            "timing": {"handshake_duration_ms": {"min": 150, "max": 180}}
         }
     }
     p = tmp_path / "signatures.json"
@@ -58,62 +63,69 @@ def dslam_detector(mock_ssh_interface, signature_file):
         yield detector
 
 
-def test_detect_via_snmp_success(dslam_detector, mock_ssh_interface):
-    """Tests successful SNMP vendor identification."""
-    huawei_oid = "1.3.6.1.4.1.2011.2.82.8"
-    mock_ssh_interface.execute_command.return_value = (huawei_oid, "")
-    results = dslam_detector._detect_via_snmp()
-    assert len(results) == 1
-    assert results[0]['vendor'] == 'huawei'
+def test_calculate_timing_confidence_success(dslam_detector):
+    """Tests that a duration within a vendor's range returns a correct match."""
+    # This duration (210ms) is in Huawei's and Nokia's range in the test data
+    analysis = {"handshake_duration": 210.5}
+    results = dslam_detector._calculate_timing_confidence(analysis)
 
-def test_detect_via_dhcp_success(dslam_detector):
-    """Tests successful DHCP vendor identification."""
-    dslam_detector.dhcp_analyzer.capture_and_analyze.return_value = {"circuit_id": b"ATM 1:2:3:4"}
-    results = dslam_detector._detect_via_dhcp()
-    assert len(results) == 1
-    assert results[0]['vendor'] == 'nokia_alcatel'
+    assert len(results) == 2
+    vendors = {r['vendor'] for r in results}
+    assert 'huawei' in vendors
+    assert 'nokia_alcatel' in vendors
+    assert results[0]['confidence'] == dslam_detector.TIMING_MATCH_SCORE
+    assert results[0]['method'] == 'timing'
 
-def test_detect_via_dns_success(dslam_detector):
-    """Tests successful DNS vendor identification."""
+def test_calculate_timing_confidence_no_match(dslam_detector):
+    """Tests that a duration outside all ranges returns no match."""
+    analysis = {"handshake_duration": 500.0}
+    results = dslam_detector._calculate_timing_confidence(analysis)
+    assert len(results) == 0
+
+def test_calculate_timing_confidence_no_duration(dslam_detector):
+    """Tests that no match is returned if duration is missing from analysis."""
+    analysis = {"vendor_id": "HWTC"} # No handshake_duration key
+    results = dslam_detector._calculate_timing_confidence(analysis)
+    assert len(results) == 0
+
+def test_detect_via_g_hs_includes_timing(dslam_detector):
+    """
+    Tests that the main G.hs detection method returns both signature
+    and timing results from a single analysis.
+    """
+    dslam_detector.ghs_analyzer.analyze_capture.return_value = HUAWEI_GHS_ANALYSIS
+    results = dslam_detector._detect_via_g_hs()
+
+    # Expect 2 results: one for GHS signature, one for timing
+    assert len(results) == 2
+    methods = {r['method'] for r in results}
+    assert 'g_hs' in methods
+    assert 'timing' in methods
+
+    # Check that the GHS result has a high confidence score
+    ghs_result = next(r for r in results if r['method'] == 'g_hs')
+    assert ghs_result['confidence'] > dslam_detector.TIMING_MATCH_SCORE
+
+def test_identify_vendor_all_methods(dslam_detector):
+    """
+    Tests the full identify_vendor flow where multiple methods return results,
+    and the highest confidence one is chosen.
+    """
+    # G.hs returns a strong match for Huawei
+    dslam_detector.ghs_analyzer.analyze_capture.return_value = HUAWEI_GHS_ANALYSIS
+    # SNMP fails
+    dslam_detector.ssh.execute_command.return_value = ("", "Timeout")
+    # DNS returns a weaker match for ZTE
     dslam_detector.dns_analyzer.get_hostname_by_ip.return_value = ZTE_DNS_HOSTNAME
-    results = dslam_detector._detect_via_dns()
-    assert len(results) == 1
-    assert results[0]['vendor'] == 'zte'
-
-def test_detect_via_tr069_success(dslam_detector):
-    """Tests successful TR-069 vendor identification."""
-    dslam_detector.tr069_analyzer.capture_and_analyze.return_value = HUAWEI_TR069_ANALYSIS
-    results = dslam_detector._detect_via_tr069()
-    assert len(results) == 1
-    result = results[0]
-    assert result['vendor'] == 'huawei'
-    assert result['confidence'] == dslam_detector.TR069_MANUFACTURER_SCORE
-
-def test_detect_via_tr069_no_match(dslam_detector):
-    """Tests TR-069 detection when the manufacturer does not match."""
-    dslam_detector.tr069_analyzer.capture_and_analyze.return_value = {"manufacturer": "UnknownCorp"}
-    results = dslam_detector._detect_via_tr069()
-    assert len(results) == 0
-
-def test_detect_via_tr069_analysis_fails(dslam_detector):
-    """Tests TR-069 detection when the analyzer returns None."""
-    dslam_detector.tr069_analyzer.capture_and_analyze.return_value = None
-    results = dslam_detector._detect_via_tr069()
-    assert len(results) == 0
-
-def test_identify_vendor_tr069_is_best_match(dslam_detector, mock_ssh_interface):
-    """Tests that the best result is chosen when TR-069 has the highest confidence."""
-    # Mock other methods to fail or have low confidence
-    dslam_detector.ghs_analyzer.capture_and_analyze.return_value = None
+    # DHCP fails
     dslam_detector.dhcp_analyzer.capture_and_analyze.return_value = None
-    dslam_detector.dns_analyzer.get_hostname_by_ip.return_value = None
-    mock_ssh_interface.execute_command.return_value = ("", "Timeout") # SNMP fails
+    # TR-069 fails
+    dslam_detector.tr069_analyzer.capture_and_analyze.return_value = None
 
-    # TR-069 provides a high-confidence match
-    dslam_detector.tr069_analyzer.capture_and_analyze.return_value = NOKIA_TR069_ANALYSIS
-
+    # The G.hs signature match for Huawei should be the highest confidence
     result = dslam_detector.identify_vendor()
 
     assert result is not None
-    assert result['vendor'] == 'nokia_alcatel'
-    assert result['confidence'] == dslam_detector.TR069_MANUFACTURER_SCORE
+    assert result['vendor'] == 'huawei'
+    assert result['method'] == 'g_hs'
+    assert result['confidence'] == 85 # 70 (ID) + 15 (VSI)

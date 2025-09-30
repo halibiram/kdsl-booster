@@ -16,13 +16,14 @@ class UniversalDSLAMDetector:
     # Confidence scoring weights
     SNMP_MATCH_SCORE = 95
     DHCP_MATCH_SCORE = 90
-    GHS_VENDOR_ID_SCORE = 70
     TR069_MANUFACTURER_SCORE = 80
+    GHS_VENDOR_ID_SCORE = 70
     DNS_VENDOR_SCORE = 25
-    DNS_MODEL_SCORE = 15
     GHS_VSI_SCORE = 15
+    DNS_MODEL_SCORE = 15
+    TIMING_MATCH_SCORE = 10 # Low confidence for supplementary evidence
     GHS_PAYLOAD_SCORE = 5
-    CONFIDENCE_THRESHOLD = 20
+    CONFIDENCE_THRESHOLD = 10 # Lowered for timing/dns matches
 
     def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
         """
@@ -37,7 +38,7 @@ class UniversalDSLAMDetector:
         self.detection_methods = {
             'snmp': self._detect_via_snmp,
             'dhcp': self._detect_via_dhcp,
-            'g_hs': self._detect_via_g_hs,
+            'g_hs': self._detect_via_g_hs, # Note: g_hs now includes timing
             'dns': self._detect_via_dns,
             'tr069': self._detect_via_tr069,
         }
@@ -87,30 +88,56 @@ class UniversalDSLAMDetector:
             logging.warning(f"No match exceeded the confidence threshold of {self.CONFIDENCE_THRESHOLD}%.")
             return None
 
+    def _detect_via_g_hs(self) -> list:
+        """
+        Orchestrates all G.hs-based detection methods (signature and timing)
+        from a single packet capture.
+        """
+        logging.info("Attempting to identify vendor via G.hs suite (Signatures + Timing).")
+        analysis = self.ghs_analyzer.analyze_capture()
+        if not analysis:
+            logging.warning("G.hs analysis did not yield any results.")
+            return []
+
+        all_ghs_results = []
+        all_ghs_results.extend(self._calculate_ghs_confidence(analysis))
+        all_ghs_results.extend(self._calculate_timing_confidence(analysis))
+
+        return all_ghs_results
+
+    def _calculate_timing_confidence(self, analysis: dict) -> list:
+        """
+        Calculates confidence scores based on G.hs handshake duration.
+        """
+        duration = analysis.get("handshake_duration")
+        if duration is None:
+            return []
+
+        results = []
+        for vendor, data in self.signatures.items():
+            timing_sig = data.get('timing', {}).get('handshake_duration_ms', {})
+            if timing_sig and timing_sig.get('min') <= duration <= timing_sig.get('max'):
+                results.append({
+                    "vendor": vendor,
+                    "confidence": self.TIMING_MATCH_SCORE,
+                    "description": f"Handshake duration {duration:.2f}ms within range ({timing_sig['min']}-{timing_sig['max']}ms)",
+                    "method": "timing"
+                })
+        return results
+
     def _detect_via_tr069(self) -> list:
         """
         Analyzes TR-069 Inform messages to identify the vendor.
         """
-        logging.info("Attempting to identify vendor via TR-069 analysis.")
         analysis = self.tr069_analyzer.capture_and_analyze()
-
-        if not analysis or 'manufacturer' not in analysis:
-            logging.warning("TR-069 analysis did not yield a manufacturer.")
-            return []
+        if not analysis or 'manufacturer' not in analysis: return []
 
         manufacturer = analysis['manufacturer']
-        logging.info(f"TR-069 analysis yielded manufacturer: {manufacturer}")
-
         for vendor, data in self.signatures.items():
             tr069_sig = data.get('tr069', {})
             for pattern in tr069_sig.get('manufacturer_patterns', []):
                 if re.search(pattern, manufacturer, re.IGNORECASE):
-                    return [{
-                        "vendor": vendor,
-                        "confidence": self.TR069_MANUFACTURER_SCORE,
-                        "description": f"TR-069 Manufacturer match on '{manufacturer}' (pattern: {pattern})",
-                        "method": "tr069"
-                    }]
+                    return [{"vendor": vendor, "confidence": self.TR069_MANUFACTURER_SCORE, "description": f"TR-069 Manufacturer match on '{manufacturer}' (pattern: {pattern})", "method": "tr069"}]
         return []
 
     def _detect_via_dns(self, target_ip: str = '8.8.8.8') -> list:
@@ -122,7 +149,6 @@ class UniversalDSLAMDetector:
 
         results = []
         hostname_lower = hostname.lower()
-
         for vendor, data in self.signatures.items():
             dns_sig = data.get('dns', {})
             score = 0
@@ -161,18 +187,14 @@ class UniversalDSLAMDetector:
         """
         analysis = self.dhcp_analyzer.capture_and_analyze()
         if not analysis or 'circuit_id' not in analysis: return []
-
         try:
             circuit_id_str = analysis['circuit_id'].decode('ascii', errors='ignore')
         except:
             return []
-
         for vendor, data in self.signatures.items():
             dhcp_sig = data.get('dhcp', {})
-            if 'circuit_id_pattern' in dhcp_sig:
-                pattern = dhcp_sig['circuit_id_pattern']
-                if re.match(pattern, circuit_id_str):
-                    return [{"vendor": vendor, "confidence": self.DHCP_MATCH_SCORE, "description": f"DHCP Circuit ID match (pattern: {pattern})", "method": "dhcp"}]
+            if 'circuit_id_pattern' in dhcp_sig and re.match(dhcp_sig['circuit_id_pattern'], circuit_id_str):
+                return [{"vendor": vendor, "confidence": self.DHCP_MATCH_SCORE, "description": f"DHCP Circuit ID match (pattern: {dhcp_sig['circuit_id_pattern']})", "method": "dhcp"}]
         return []
 
     def _calculate_ghs_confidence(self, analysis: dict) -> list:
@@ -180,7 +202,6 @@ class UniversalDSLAMDetector:
         Calculates confidence scores for vendors based on G.hs analysis.
         """
         if not analysis or not analysis.get('vendor_id'): return []
-
         results = []
         analyzed_vendor_id = analysis['vendor_id']
         analyzed_vsi_bytes = analysis.get('vsi', b'')
@@ -188,7 +209,6 @@ class UniversalDSLAMDetector:
             analyzed_vsi_str = analyzed_vsi_bytes.decode('ascii', errors='ignore')
         except:
             analyzed_vsi_str = ""
-
         for vendor, data in self.signatures.items():
             ghs_data = data.get('ghs', {})
             for sig in ghs_data.get('signatures', []):
@@ -202,10 +222,3 @@ class UniversalDSLAMDetector:
                 if score > 0:
                     results.append({"vendor": vendor, "confidence": min(score, 100), "description": sig.get('description'), "method": "g_hs"})
         return sorted(results, key=lambda x: x['confidence'], reverse=True)
-
-    def _detect_via_g_hs(self) -> list:
-        """
-        Identifies vendor by analyzing the G.hs handshake and scoring matches.
-        """
-        analysis = self.ghs_analyzer.capture_and_analyze()
-        return self._calculate_ghs_confidence(analysis) if analysis else []

@@ -14,6 +14,9 @@
             "manufacturer_patterns": ["Huawei", "HWTC"],
             "acs_url_patterns": ["/acs", "/tr069"]
         },
+        "timing": {
+            "handshake_duration_ms": {"min": 180, "max": 220}
+        },
         "ghs": {
             "signatures": [
                 {
@@ -45,6 +48,9 @@
         "tr069": {
             "manufacturer_patterns": ["Nokia", "Alcatel-Lucent", "ALCL"],
             "acs_url_patterns": ["/cwmp"]
+        },
+        "timing": {
+            "handshake_duration_ms": {"min": 200, "max": 250}
         },
         "ghs": {
             "signatures": [
@@ -78,6 +84,9 @@
             "manufacturer_patterns": ["ZTE", "ZTEG"],
             "acs_url_patterns": ["/acs"]
         },
+        "timing": {
+            "handshake_duration_ms": {"min": 150, "max": 180}
+        },
         "ghs": {
             "signatures": [
                 {
@@ -90,67 +99,17 @@
         }
     },
     "adtran": {
-        "snmp": {
-            "sysObjectID": "1.3.6.1.4.1.664"
-        },
-        "dns": {
-            "vendor_patterns": ["adtran"],
-            "model_patterns": ["ta5000"]
-        },
-        "ghs": {
-            "signatures": [
-                {
-                    "description": "Total Access 5000",
-                    "vendor_id": "ADTN",
-                    "cl_payload_pattern": "020100614401",
-                    "vsi_patterns": ["TA5000"]
-                }
-            ]
-        }
+        "snmp": { "sysObjectID": "1.3.6.1.4.1.664" },
+        "dns": { "vendor_patterns": ["adtran"], "model_patterns": ["ta5000"] },
+        "ghs": { "signatures": [ { "description": "Total Access 5000", "vendor_id": "ADTN", "cl_payload_pattern": "020100614401", "vsi_patterns": ["TA5000"] } ] }
     },
     "calix": {
-        "snmp": {
-            "sysObjectID": "1.3.6.1.4.1.6321"
-        },
-        "dns": {
-            "vendor_patterns": ["calix"],
-            "model_patterns": ["e7"]
-        },
-        "ghs": {
-            "signatures": [
-                {
-                    "description": "E7 Series",
-                    "vendor_id": "CALX",
-                    "cl_payload_pattern": "020100632101",
-                    "vsi_patterns": ["E7"]
-                }
-            ]
-        }
+        "snmp": { "sysObjectID": "1.3.6.1.4.1.6321" },
+        "dns": { "vendor_patterns": ["calix"], "model_patterns": ["e7"] },
+        "ghs": { "signatures": [ { "description": "E7 Series", "vendor_id": "CALX", "cl_payload_pattern": "020100632101", "vsi_patterns": ["E7"] } ] }
     },
-    "broadcom": {
-        "ghs": {
-            "signatures": [
-                {
-                    "description": "Generic Broadcom Chipset",
-                    "vendor_id": "BDCM",
-                    "cl_payload_pattern": "020100FFFF01",
-                    "vsi_patterns": ["BCM"]
-                }
-            ]
-        }
-    },
-    "lantiq": {
-        "ghs": {
-            "signatures": [
-                {
-                    "description": "Generic Lantiq/Intel Chipset",
-                    "vendor_id": "LNTQ",
-                    "cl_payload_pattern": "020100FFFF02",
-                    "vsi_patterns": ["VRX"]
-                }
-            ]
-        }
-    },
+    "broadcom": { "ghs": { "signatures": [ { "description": "Generic Broadcom Chipset", "vendor_id": "BDCM", "cl_payload_pattern": "020100FFFF01", "vsi_patterns": ["BCM"] } ] } },
+    "lantiq": { "ghs": { "signatures": [ { "description": "Generic Lantiq/Intel Chipset", "vendor_id": "LNTQ", "cl_payload_pattern": "020100FFFF02", "vsi_patterns": ["VRX"] } ] } },
     "placeholder_vendor_1": { "ghs": {"signatures": [{ "description": "Placeholder 1", "vendor_id": "PLH1", "cl_payload_pattern": "020100FFFF03", "vsi_patterns": [] }] }},
     "placeholder_vendor_2": { "ghs": {"signatures": [{ "description": "Placeholder 2", "vendor_id": "PLH2", "cl_payload_pattern": "020100FFFF04", "vsi_patterns": [] }] }},
     "placeholder_vendor_3": { "ghs": {"signatures": [{ "description": "Placeholder 3", "vendor_id": "PLH3", "cl_payload_pattern": "020100FFFF05", "vsi_patterns": [] }] }},
