@@ -49,12 +49,14 @@ class ExperimentRunner:
                 # Simulate measuring the actual performance
                 measured_speed = self._measure_performance(result, rate)
 
-                # Store the outcome
+                # Store the outcome in the format AIOptimizer expects
                 self.results.append({
                     "target_rate_mbps": rate,
                     "target_distance_m": distance,
-                    "manipulation_success": result,
+                    "manipulation_success": result["snr_margin_set"],
                     "measured_speed_mbps": measured_speed,
+                    "applied_snr_db": result["applied_snr_db"],
+                    "applied_attenuation_db": result["applied_attenuation_db"]
                 })
 
         print("Parameter sweep complete.")

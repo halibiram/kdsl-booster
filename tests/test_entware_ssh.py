@@ -57,11 +57,16 @@ def test_interface_successful_connect_and_disconnect(ssh_interface_setup):
     mock_client.close.assert_called()
 
 def test_interface_keepalive_is_sent(ssh_interface_setup):
+    """
+    Tests that keepalives are sent by checking the correct method.
+    """
     interface, _, mock_transport = ssh_interface_setup
     interface.connect()
-    time.sleep(0.12)
+    time.sleep(0.12)  # Wait for a few keepalive cycles
     interface.disconnect()
-    assert mock_transport.send_keepalive.call_count >= 2
+    # The implementation uses transport.send_ignore() for keepalives.
+    # With a 0.05s interval, we expect at least 2 to have been sent.
+    assert mock_transport.send_ignore.call_count >= 2
 
 def test_interface_automatic_reconnection(ssh_interface_setup):
     interface, mock_client, mock_transport = ssh_interface_setup

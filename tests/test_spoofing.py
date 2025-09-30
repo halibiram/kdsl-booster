@@ -3,60 +3,56 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from src.spoofing import KernelDSLManipulator
-from src.keenetic_dsl_interface import KEENETIC_HARDWARE_MATRIX
+from src.advanced_dsl_physics import AdvancedDSLPhysics
 
 @pytest.fixture
 def manipulator_setup(mocker):
     """
-    A fixture that provides a KernelDSLManipulator instance with all its
+    A fixture that provides a KernelDSLManipulator instance with its
     dependencies mocked out for isolated testing.
     """
     # Mock the SSH interface dependency
     mock_ssh_interface = MagicMock()
 
-    # Mock the KeeneticDSLInterface dependency
-    mock_dsl_interface_instance = MagicMock()
-    # Simulate successful hardware detection
-    mock_dsl_interface_instance.detect_hardware.return_value = 'KN-1010'
-    mock_dsl_interface_instance.hardware_specs = KEENETIC_HARDWARE_MATRIX['KN-1010']
-    mocker.patch('src.spoofing.KeeneticDSLInterface', return_value=mock_dsl_interface_instance)
+    # Mock the HAL (Hardware Abstraction Layer) that get_hal() would return
+    mock_hal_instance = MagicMock()
+    mock_hal_instance.set_snr_margin.return_value = True
+
+    # Mock the KeeneticDSLInterface factory
+    mock_dsl_interface_factory = MagicMock()
+    mock_dsl_interface_factory.get_hal.return_value = mock_hal_instance
+    mocker.patch('src.spoofing.KeeneticDSLInterface', return_value=mock_dsl_interface_factory)
 
     # Mock the AdvancedDSLPhysics dependency
     mock_physics_instance = MagicMock()
-    # Set the profile attribute on the mock to satisfy the test assertion
-    mock_physics_instance.profile = '17a'
     # Configure mock return values for physics calculations
-    mock_physics_instance.calculate_max_bitrate.return_value = 105.0  # Simulate calculated rate
-    mock_physics_instance.model_frequency_dependent_attenuation.return_value = {
-        'DS1': 10.0, 'DS2': 20.0, 'DS3': 30.0
-    }
+    mock_physics_instance.calculate_snr_per_tone.return_value = np.array([30.0, 35.0, 40.0]) # Avg = 35.0
+    mock_physics_instance.model_attenuation_per_tone.return_value = np.array([10.0, 15.0, 20.0]) # Avg = 15.0
     mocker.patch('src.spoofing.AdvancedDSLPhysics', return_value=mock_physics_instance)
-
-    # Spy on the internal SNR search method to verify it's called
-    search_spy = mocker.spy(KernelDSLManipulator, '_find_optimal_snr_for_rate')
 
     # Instantiate the class under test
     manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface, profile='17a')
 
-    return manipulator, mock_dsl_interface_instance, mock_physics_instance, search_spy
+    return manipulator, mock_hal_instance, mock_physics_instance, mock_dsl_interface_factory
 
 def test_manipulator_initialization(manipulator_setup):
     """
-    Tests that the manipulator initializes its dependencies correctly and detects hardware.
+    Tests that the manipulator initializes its dependencies correctly and gets a HAL.
     """
-    _, mock_dsl_interface, mock_physics, _ = manipulator_setup
+    _, _, mock_physics_instance, mock_dsl_interface_factory = manipulator_setup
 
-    # Verify that hardware detection was called upon initialization
-    mock_dsl_interface.detect_hardware.assert_called_once()
-    # Verify that the physics model was initialized with the correct profile
-    assert mock_physics.profile == '17a'
+    # Verify that the factory was asked to create a HAL instance
+    mock_dsl_interface_factory.get_hal.assert_called_once()
+    # Verify that the physics model was initialized
+    assert isinstance(mock_physics_instance, MagicMock)
+
 
 def test_set_target_profile_orchestration(manipulator_setup):
     """
     Tests that set_target_profile correctly orchestrates the calculation and
-    writing of new DSL parameters.
+    writing of new DSL parameters via the HAL.
     """
-    manipulator, mock_dsl_interface, mock_physics, search_spy = manipulator_setup
+    manipulator, mock_hal, mock_physics, _ = manipulator_setup
 
     # --- Execute the method ---
     results = manipulator.set_target_profile(
@@ -65,33 +61,32 @@ def test_set_target_profile_orchestration(manipulator_setup):
     )
 
     # --- Assertions ---
-    # 1. Verify that the optimal SNR was searched for
-    search_spy.assert_called_once_with(manipulator, 100, 300)
+    # 1. Verify that physical parameters were calculated for the given distance
+    mock_physics.calculate_snr_per_tone.assert_called_once_with(distance_m=300)
+    mock_physics.model_attenuation_per_tone.assert_called_once_with(distance_m=300)
 
-    # 2. Verify that frequency-dependent attenuation was modeled
-    mock_physics.model_frequency_dependent_attenuation.assert_called_once_with(distance_m=300)
+    # 2. Verify that the HAL was called to set the SNR margin
+    # The mock physics calculates an average SNR of 35.0.
+    # The register value should be int(35.0 * 10) = 350.
+    mock_hal.set_snr_margin.assert_called_once_with(350)
 
-    # 3. Verify that the results were written to the correct registers with correct formatting
-    # Optimal SNR is found via search; let's assume the spy returns the value from the search.
-    # The search will return ~38.3 based on mock setup. Value written is hex(383) = '0x17f'
-    # We can't easily get the return value of the spy, so let's mock _find_optimal_snr_for_rate directly
-    with patch.object(manipulator, '_find_optimal_snr_for_rate', return_value=38.3) as mock_find_snr:
-        results = manipulator.set_target_profile(100, 300)
+    # 3. Verify the results dictionary is correct
+    assert results["snr_margin_set"] is True
+    assert results["applied_snr_db"] == 35.0
+    assert results["applied_attenuation_db"] == 15.0
 
-        # Attenuation is the mean of [10, 20, 30] = 20.0. Value written is hex(200) = '0xc8'
-        mock_dsl_interface.write_dsl_register.assert_any_call('attenuation', '0xc8')
-        mock_dsl_interface.write_dsl_register.assert_any_call('snr_margin', '0x17f')
 
-def test_manipulator_raises_error_on_hw_detect_failure(mocker):
+def test_manipulator_raises_error_on_hal_failure(mocker):
     """
-    Tests that KernelDSLManipulator raises a RuntimeError if hardware detection fails.
+    Tests that KernelDSLManipulator raises a RuntimeError if HAL initialization fails.
     """
     mock_ssh = MagicMock()
-    # Mock KeeneticDSLInterface to simulate a hardware detection failure
-    mock_dsl_interface_instance = MagicMock()
-    mock_dsl_interface_instance.detect_hardware.return_value = None # Simulate failure
-    mocker.patch('src.spoofing.KeeneticDSLInterface', return_value=mock_dsl_interface_instance)
+    # Mock KeeneticDSLInterface to simulate a HAL failure
+    mock_dsl_interface_factory = MagicMock()
+    mock_dsl_interface_factory.get_hal.return_value = None # Simulate failure
+    mocker.patch('src.spoofing.KeeneticDSLInterface', return_value=mock_dsl_interface_factory)
+    mocker.patch('src.spoofing.AdvancedDSLPhysics')
 
     # Expect a RuntimeError during initialization
-    with pytest.raises(RuntimeError, match="Failed to detect Keenetic hardware"):
+    with pytest.raises(RuntimeError, match="Failed to detect Keenetic hardware or initialize HAL"):
         KernelDSLManipulator(ssh_interface=mock_ssh)

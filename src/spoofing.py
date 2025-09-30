@@ -21,18 +21,19 @@ class KernelDSLManipulator:
 
     def __init__(self, ssh_interface: EntwareSSHInterface, profile: str = '17a'):
         """
-        Initializes the manipulator, detects hardware, and sets up advanced physics models.
+        Initializes the manipulator, gets the correct hardware abstraction layer (HAL),
+        and sets up advanced physics models.
 
         Args:
             ssh_interface: An active EntwareSSHInterface instance.
             profile: The VDSL2 profile to use for physics calculations (e.g., '17a').
         """
-        self.dsl_interface = KeeneticDSLInterface(ssh_interface)
+        self.dsl_interface_factory = KeeneticDSLInterface(ssh_interface)
+        self.hal = self.dsl_interface_factory.get_hal()
         self.physics = AdvancedDSLPhysics(profile=profile)
 
-        self.hardware_detected = self.dsl_interface.detect_hardware()
-        if not self.hardware_detected:
-            raise RuntimeError("Failed to detect Keenetic hardware. Cannot proceed.")
+        if not self.hal:
+            raise RuntimeError("Failed to detect Keenetic hardware or initialize HAL. Cannot proceed.")
 
     def _find_optimal_snr_for_rate(self, target_rate_mbps: float, distance_m: int) -> float:
         """
@@ -58,49 +59,36 @@ class KernelDSLManipulator:
         self, target_rate_mbps: float, target_distance_m: int
     ) -> dict:
         """
-        Calculates and applies a new DSL profile using advanced physics models.
+        Calculates and applies a new DSL profile based on a spoofed distance.
 
         Args:
-            target_rate_mbps: The desired data rate in Mbps.
+            target_rate_mbps: The desired data rate (used for experimentation).
             target_distance_m: The simulated target distance in meters.
 
         Returns:
-            A dictionary reporting the success of each parameter write operation.
+            A dictionary reporting success and including the parameters for training.
         """
-        if not self.hardware_detected:
-            return {"error": "Hardware not detected", "snr_margin_set": False, "attenuation_set": False}
+        print(f"Setting target profile for {self.hal.__class__.__name__}: {target_rate_mbps} Mbps at {target_distance_m}m")
 
-        print(f"Setting target profile for {self.hardware_detected}: {target_rate_mbps} Mbps at {target_distance_m}m")
+        # 1. Calculate the physical parameters that correspond to the spoofed distance.
+        snrs_per_tone = self.physics.calculate_snr_per_tone(distance_m=target_distance_m)
+        target_snr = np.mean(snrs_per_tone)
 
-        # 1. Calculate required parameters using the advanced physics model
-        target_snr = self._find_optimal_snr_for_rate(target_rate_mbps, target_distance_m)
-        attenuations = self.physics.model_frequency_dependent_attenuation(distance_m=target_distance_m)
-        # For now, we take the average attenuation across bands as the target value.
-        target_attenuation = np.mean(list(attenuations.values()))
+        attenuations_per_tone = self.physics.model_attenuation_per_tone(distance_m=target_distance_m)
+        target_attenuation = np.mean(attenuations_per_tone)
 
-        print(f"Calculated Targets -> Required SNR: {target_snr} dB, Avg Attenuation: {target_attenuation:.2f} dB")
+        snr_register_value = int(target_snr * 10)
+        print(f"Calculated Targets for {target_distance_m}m -> Avg SNR: {target_snr:.1f} dB, Avg Attenuation: {target_attenuation:.2f} dB")
 
-        # 2. Write parameters to hardware registers
-        results = {}
+        # 2. Write SNR margin to the hardware via the HAL
+        success = self.hal.set_snr_margin(snr_register_value)
 
-        # Write SNR margin if supported
-        if 'snr_margin' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
-            # The register value is often in 0.1 dB units
-            snr_register_value = hex(int(target_snr * 10))
-            results["snr_margin_set"] = self.dsl_interface.write_dsl_register(
-                'snr_margin', snr_register_value
-            )
-        else:
-            results["snr_margin_set"] = "not_supported"
-
-        # Write attenuation if supported
-        if 'attenuation' in self.dsl_interface.hardware_specs.get('dsl_registers', {}):
-            attn_register_value = hex(int(target_attenuation * 10))
-            results["attenuation_set"] = self.dsl_interface.write_dsl_register(
-                'attenuation', attn_register_value
-            )
-        else:
-            results["attenuation_set"] = "not_supported"
+        results = {
+            "snr_margin_set": success,
+            "attenuation_set": "not_supported",
+            "applied_snr_db": target_snr if success else 0,
+            "applied_attenuation_db": target_attenuation,
+        }
 
         print(f"Manipulation results: {results}")
         return results

@@ -24,15 +24,22 @@ def main():
     # For this demo, we mock the interface to allow the script to run.
     print("\n[Step 1] Initializing components...")
     mock_ssh_interface = MagicMock()
-    mock_ssh_interface.execute_command.return_value = ("-", "") # Default mock response
 
-    # Initialize the core components with baseline performance values
-    # These would typically be read from the device initially.
-    manipulator = KernelDSLManipulator(
-        ssh_interface=mock_ssh_interface,
-        base_rate_mbps=30,
-        base_snr_db=25,
-    )
+    def mock_execute_command(command, **kwargs):
+        """A more intelligent mock for SSH commands."""
+        if "cat /proc/device-tree/model" in command:
+            # Respond with a valid Keenetic model to pass hardware detection.
+            return ('KN-1010', '')
+        if "command -v xdslctl" in command:
+            # Respond with a fake path to pass driver discovery.
+            return ('/usr/sbin/xdslctl', '')
+        # Default response for other commands (like setting SNR).
+        return ('', '')
+
+    mock_ssh_interface.execute_command.side_effect = mock_execute_command
+
+    # Initialize the core components
+    manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface)
     experiment_runner = ExperimentRunner(manipulator=manipulator)
     ai_optimizer = AIOptimizer()
     print("Components initialized successfully.")
@@ -43,10 +50,6 @@ def main():
     # To keep the demo fast, we'll test a small but effective range of parameters.
     rate_range = np.arange(40, 151, 10)  # 40, 50, ..., 150 Mbps
     distance_range = np.arange(20, 301, 40) # 20, 60, ..., 300 m
-
-    # The manipulator's `set_target_profile` is mocked to simulate success.
-    # In a real run, this would be writing to the device.
-    manipulator.set_target_profile = MagicMock(return_value={'snr_margin_set': True, 'attenuation_set': True})
 
     experiment_runner.parameter_sweep(rate_range, distance_range)
     print(f"Data collection complete. {len(experiment_runner.results)} experiments run.")

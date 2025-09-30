@@ -6,10 +6,12 @@ from src.experimentation import ExperimentRunner
 def mock_manipulator():
     """Provides a mocked KernelDSLManipulator for testing the runner."""
     manipulator = MagicMock()
-    # Simulate a successful manipulation result
+    # Simulate a successful manipulation result with the full data structure
     manipulator.set_target_profile.return_value = {
         "snr_margin_set": True,
-        "attenuation_set": True,
+        "attenuation_set": "not_supported",
+        "applied_snr_db": 35.0,
+        "applied_attenuation_db": 15.0,
     }
     return manipulator
 
@@ -51,11 +53,10 @@ def test_parameter_sweep(mock_manipulator):
     last_result = runner.results[-1]
     assert last_result["target_rate_mbps"] == 120
     assert last_result["target_distance_m"] == 30
-    assert last_result["manipulation_success"]["snr_margin_set"] is True
-    # Check that the simulated performance measurement was also recorded
-    assert "measured_speed_mbps" in last_result
-    # 120 * 0.95 = 114.0
-    assert last_result["measured_speed_mbps"] == 114.0
+    assert last_result["manipulation_success"] is True
+    assert last_result["measured_speed_mbps"] == 114.0 # 120 * 0.95
+    assert last_result["applied_snr_db"] == 35.0
+    assert last_result["applied_attenuation_db"] == 15.0
 
 def test_parameter_sweep_with_failed_manipulation(mock_manipulator):
     """
@@ -64,7 +65,9 @@ def test_parameter_sweep_with_failed_manipulation(mock_manipulator):
     # Simulate a failed manipulation
     mock_manipulator.set_target_profile.return_value = {
         "snr_margin_set": False,
-        "attenuation_set": True,
+        "attenuation_set": "not_supported",
+        "applied_snr_db": 0,  # SNR is 0 on failure
+        "applied_attenuation_db": 15.0, # Attenuation is still calculated
     }
 
     runner = ExperimentRunner(manipulator=mock_manipulator)
@@ -74,6 +77,7 @@ def test_parameter_sweep_with_failed_manipulation(mock_manipulator):
 
     assert len(runner.results) == 1
     result = runner.results[0]
-    assert result["manipulation_success"]["snr_margin_set"] is False
+    assert result["manipulation_success"] is False
     # Performance should be 0 if manipulation fails
     assert result["measured_speed_mbps"] == 0.0
+    assert result["applied_snr_db"] == 0
