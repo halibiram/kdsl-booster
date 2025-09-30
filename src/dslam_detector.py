@@ -1,4 +1,5 @@
 import logging
+import json
 from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
 
 # Configure logging
@@ -12,124 +13,180 @@ class UniversalDSLAMDetector:
     guess about the DSLAM hardware the user is connected to. This information
     is critical for tailoring vendor-specific exploits.
     """
+    # Confidence scoring weights
+    VENDOR_ID_MATCH_SCORE = 70
+    VSI_PATTERN_MATCH_SCORE = 15
+    PAYLOAD_MATCH_SCORE = 5
+    CONFIDENCE_THRESHOLD = 50
 
-    # A database of known signatures for different DSLAM vendors.
-    # This would be expanded over time with more research.
-    VENDOR_SIGNATURES = {
-        'huawei': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.2011',
-            'g_hs_pattern': b'\x02\x01\x00\x93\x11\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'HWON'
-        },
-        'nokia': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.637',
-            'g_hs_pattern': b'\x02\x01\x00\x85\x07\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'ALIN'
-        },
-        'zte': {
-            'snmp_oid_pattern': '1.3.6.1.4.1.3902',
-            'g_hs_pattern': b'\x02\x01\x00\x78\x22\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', # Example signature
-            'dhcp_option_125': 'ZTE'
-        }
-    }
-
-    def __init__(self, ssh_interface):
+    def __init__(self, ssh_interface, signature_file='src/ghs_signatures.json'):
         """
         Initializes the detector with an SSH interface for running commands.
 
         Args:
             ssh_interface: An active EntwareSSHInterface instance.
+            signature_file: Path to the JSON file containing vendor signatures.
         """
         self.ssh = ssh_interface
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
+        self.signatures = self._load_signatures(signature_file)
         self.detection_methods = {
             'snmp': self._detect_via_snmp,
             'dhcp': self._detect_via_dhcp,
             'g_hs': self._detect_via_g_hs,
         }
 
-    def identify_vendor(self, methods: list = ['snmp', 'dhcp', 'g_hs']) -> str | None:
+    def _load_signatures(self, signature_file: str) -> dict:
+        """Loads vendor signatures from a JSON file."""
+        logging.info(f"Loading vendor signatures from {signature_file}")
+        try:
+            with open(signature_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            logging.error(f"Signature file not found: {signature_file}")
+            return {}
+        except json.JSONDecodeError:
+            logging.error(f"Error decoding JSON from signature file: {signature_file}")
+            return {}
+
+    def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp']) -> dict | None:
         """
         Attempts to identify the DSLAM vendor using a list of specified methods.
 
+        This method now returns the highest-confidence match from all specified
+        detection methods that exceeds the confidence threshold.
+
         Args:
-            methods: A list of detection methods to try, in order.
+            methods: A list of detection methods to try.
 
         Returns:
-            The name of the detected vendor (e.g., 'huawei') or None if no
-            match is found.
+            A dictionary of the highest-confidence vendor match, or None.
         """
+        if not self.signatures:
+            logging.error("Signature database is empty. Cannot perform detection.")
+            return None
+
+        all_results = []
         logging.info(f"Starting DSLAM vendor identification using methods: {methods}")
         for method_name in methods:
             if method_name in self.detection_methods:
                 logging.info(f"Attempting detection via {method_name}...")
-                vendor = self.detection_methods[method_name]()
-                if vendor:
-                    logging.info(f"Vendor identified as '{vendor}' using {method_name}.")
-                    return vendor
+                results = self.detection_methods[method_name]()
+                if results:
+                    all_results.extend(results)
             else:
                 logging.warning(f"Detection method '{method_name}' not implemented.")
 
-        logging.warning("Could not identify DSLAM vendor with the specified methods.")
-        return None
+        if not all_results:
+            logging.warning("Could not identify DSLAM vendor with the specified methods.")
+            return None
 
-    def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> str | None:
-        """
-        Performs an SNMP walk to find a vendor-specific OID.
-        (This is a simulation as we cannot perform real network requests).
-        """
-        # In a real implementation, this would use snmpwalk.
-        # For this simulation, we'll assume a command that returns a known OID.
-        command = f"echo 'SNMPv2-SMI::enterprises.2011 = STRING: \"Huawei\"'" # Mocked command
+        # Sort all results by confidence and return the best one
+        best_match = sorted(all_results, key=lambda x: x['confidence'], reverse=True)[0]
+
+        if best_match['confidence'] >= self.CONFIDENCE_THRESHOLD:
+            logging.info(f"Highest confidence match: {best_match['vendor']} with {best_match['confidence']}% confidence.")
+            return best_match
+        else:
+            logging.warning(f"No match exceeded the confidence threshold of {self.CONFIDENCE_THRESHOLD}%.")
+            return None
+
+    def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
+        """Simulated SNMP detection, returning a result with high confidence."""
+        command = "echo 'SNMPv2-SMI::enterprises.2011 = STRING: \"Huawei\"'"
         stdout, _ = self.ssh.execute_command(command)
+        if "2011" in stdout:
+            return [{
+                "vendor": "huawei",
+                "confidence": 95,
+                "description": "SNMP sysObjectID match",
+                "method": "snmp"
+            }]
+        return []
 
-        if stdout:
-            for vendor, signatures in self.VENDOR_SIGNATURES.items():
-                if signatures['snmp_oid_pattern'] in stdout:
-                    return vendor
-        return None
-
-    def _detect_via_dhcp(self) -> str | None:
-        """
-        Inspects DHCP client leases for vendor-specific options (e.g., Option 125).
-        (This is a simulation).
-        """
-        # This would typically involve parsing /tmp/dhcp.leases or similar.
-        command = "echo 'vendor-class-identifier \"ALIN\"'" # Mocked command for Nokia
+    def _detect_via_dhcp(self) -> list:
+        """Simulated DHCP detection, returning a result with high confidence."""
+        command = "echo 'vendor-class-identifier \"ALIN\"'"
         stdout, _ = self.ssh.execute_command(command)
+        if "ALIN" in stdout:
+            return [{
+                "vendor": "nokia_alcatel",
+                "confidence": 90,
+                "description": "DHCP Option 125 match",
+                "method": "dhcp"
+            }]
+        return []
 
-        if stdout:
-            for vendor, signatures in self.VENDOR_SIGNATURES.items():
-                if signatures['dhcp_option_125'] and signatures['dhcp_option_125'] in stdout:
-                    return vendor
-        return None
-
-    def _detect_via_g_hs(self) -> str | None:
+    def _calculate_ghs_confidence(self, analysis: dict) -> list:
         """
-        Identifies the vendor by analyzing the G.hs handshake.
+        Calculates confidence scores for vendors based on G.hs analysis.
 
-        This method orchestrates the capture and analysis of G.hs packets
-        and matches the result against a database of known vendor signatures.
+        Args:
+            analysis: The structured analysis result from GHSHandshakeAnalyzer.
+
+        Returns:
+            A list of dictionaries, each a potential vendor match with a
+            confidence score, sorted from most to least likely.
+        """
+        results = []
+        if not analysis or not analysis.get('vendor_id'):
+            return results
+
+        analyzed_vendor_id = analysis['vendor_id']
+        analyzed_vsi_bytes = analysis.get('vsi', b'')
+        analyzed_payload = analysis.get('cl_message_payload', b'')
+
+        try:
+            analyzed_vsi_str = analyzed_vsi_bytes.decode('ascii', errors='ignore')
+        except:
+            analyzed_vsi_str = ""
+
+        for vendor, data in self.signatures.items():
+            for sig in data.get('signatures', []):
+                score = 0
+                # 1. Check for a strong match on Vendor ID
+                if sig.get('vendor_id') == analyzed_vendor_id:
+                    score += self.VENDOR_ID_MATCH_SCORE
+
+                # 2. Check for VSI patterns
+                for pattern in sig.get('vsi_patterns', []):
+                    if pattern in analyzed_vsi_str:
+                        score += self.VSI_PATTERN_MATCH_SCORE
+
+                # 3. Check for a raw payload match as a fallback
+                pattern_hex = sig.get('cl_payload_pattern')
+                if pattern_hex and analyzed_payload.startswith(bytes.fromhex(pattern_hex)):
+                    score += self.PAYLOAD_MATCH_SCORE
+
+                if score > 0:
+                    results.append({
+                        "vendor": vendor,
+                        "confidence": min(score, 100), # Cap score at 100
+                        "description": sig.get('description'),
+                        "method": "g_hs"
+                    })
+
+        return sorted(results, key=lambda x: x['confidence'], reverse=True)
+
+
+    def _detect_via_g_hs(self) -> list:
+        """
+        Identifies vendor by analyzing the G.hs handshake and scoring matches.
+
+        Returns:
+            A ranked list of potential vendor matches with confidence scores.
         """
         logging.info("Attempting to identify vendor via G.hs handshake analysis.")
 
-        # In a real scenario, we might need to trigger a modem retrain to capture
-        # the handshake. For this simulation, we assume a capture is possible.
         if not self.ghs_analyzer.capture_handshake():
             logging.error("Failed to capture G.hs handshake. Aborting G.hs detection.")
-            return None
+            return []
 
         analysis = self.ghs_analyzer.analyze_capture()
-        if not analysis or not analysis.get('vendor_signature'):
-            logging.warning("G.hs analysis did not yield a vendor signature.")
-            return None
+        if not analysis:
+            logging.warning("G.hs analysis did not yield any results.")
+            return []
 
-        signature = analysis['vendor_signature']
-        logging.info(f"G.hs analysis yielded signature: {signature.hex()}")
+        logging.info(f"G.hs analysis yielded Vendor ID: {analysis.get('vendor_id')}, VSI: {analysis.get('vsi', b'').hex()}")
 
-        for vendor, signatures in self.VENDOR_SIGNATURES.items():
-            if signatures['g_hs_pattern'] and signature.startswith(signatures['g_hs_pattern']):
-                return vendor
-
-        logging.warning("G.hs signature did not match any known vendor.")
-        return None
+        return self._calculate_ghs_confidence(analysis)

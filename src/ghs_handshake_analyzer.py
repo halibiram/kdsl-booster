@@ -58,7 +58,7 @@ class GHSHandshakeAnalyzer:
         Downloads and analyzes the captured pcap file to extract handshake details.
 
         Returns:
-            A dictionary containing parsed G.hs messages and extracted capabilities.
+            A dictionary containing structured analysis of the G.hs handshake.
         """
         logging.info(f"Downloading capture file: {self.capture_file_path}")
         local_pcap_path = "ghs_capture.pcap"
@@ -77,79 +77,80 @@ class GHSHandshakeAnalyzer:
             return {}
 
         parsed_messages = []
-        full_handshake_signature = b''
-
         for pkt in packets:
             if 'LLC' in pkt:
                 payload = bytes(pkt['LLC'].payload)
-                full_handshake_signature += payload
                 msg = self._parse_ghs_message(payload)
                 if msg:
                     parsed_messages.append(msg)
 
-        # For vendor identification, the initial CL message from the DSLAM is often unique
-        vendor_signature = self._extract_cl_message_payload(parsed_messages)
+        cl_message = self._extract_cl_message(parsed_messages)
+        if not cl_message:
+            logging.warning("No CL message found in capture.")
+            return {}
 
         analysis_results = {
-            "messages": parsed_messages,
-            "capabilities": self._extract_capabilities(parsed_messages),
-            "vendor_signature": vendor_signature
+            "cl_message_payload": cl_message.get("payload"),
+            "vendor_id": cl_message.get("vendor_id"),
+            "vsi": cl_message.get("vsi"),
+            "full_analysis": cl_message
         }
 
         return analysis_results
 
     def _parse_ghs_message(self, payload: bytes) -> dict | None:
         """
-        Parses a raw G.hs message payload.
+        Parses a raw G.994.1 message payload into a structured format.
 
-        This is a simplified parser focusing on identifying message types and parameters.
-        G.hs messages are complex; this parser looks for key identifiers.
+        This parser identifies the message type and decodes the Non-Standard
+        Information Field (NSIF) to extract the vendor ID and VSI.
 
         Args:
             payload: The raw bytes of the G.hs message.
 
         Returns:
-            A dictionary with the parsed message, or None if it's not a recognized type.
+            A dictionary with the parsed message, or None if parsing fails.
         """
-        # G.hs messages are typically identified by the first few bytes.
-        # This is a simplified identification scheme.
-        if payload.startswith(b'\x01'):
-            msg_type = 'CLR' # Client Request
-        elif payload.startswith(b'\x02'):
-            msg_type = 'CL'  # Capabilities List (from DSLAM)
-        elif payload.startswith(b'\x03'):
-            msg_type = 'MS'  # Mode Select
-        elif payload.startswith(b'\x04'):
-            msg_type = 'ACK'
-        else:
-            return None # Not a message type we are parsing
+        if not payload:
+            return None
 
-        # The rest of the payload contains parameters, often in TLV format.
-        # For this simulation, we'll just store the raw parameters block.
-        parameters = payload[1:]
+        msg_type_map = {1: 'CLR', 2: 'CL', 3: 'MS', 4: 'ACK'}
+        msg_type = msg_type_map.get(payload[0])
+        if not msg_type:
+            return None
 
-        return {"type": msg_type, "payload": payload, "parameters": parameters}
+        parsed_data = {"type": msg_type, "payload": payload, "vendor_id": None, "vsi": None}
 
-    def _extract_cl_message_payload(self, messages: list) -> bytes:
-        """Finds the first CL message and returns its payload for signature matching."""
+        # The NSIF parameter is identified by a marker (0x91 for CL/CLR).
+        # It's a TLV (Type-Length-Value) field inside the message.
+        # Let's find the marker and parse it directly.
+        try:
+            # Start search after the message type byte
+            nsif_marker_index = payload.index(b'\x91', 1)
+
+            # Ensure there's at least a length byte after the marker
+            if nsif_marker_index + 1 < len(payload):
+                param_len = payload[nsif_marker_index + 1]
+                nsif_data_start = nsif_marker_index + 2
+
+                # Ensure the full parameter data is within the payload bounds
+                if nsif_data_start + param_len <= len(payload):
+                    nsif_data = payload[nsif_data_start : nsif_data_start + param_len]
+
+                    # NSIF contains: T.35 Country Code (2B), Provider Code (4B), VSI (...)
+                    if len(nsif_data) >= 6:
+                        vendor_id_bytes = nsif_data[2:6]
+                        parsed_data["vendor_id"] = vendor_id_bytes.decode('ascii', errors='ignore')
+                        parsed_data["vsi"] = nsif_data[6:] # Assign the rest of the bytes as VSI
+        except ValueError:
+            # This is not an error, it just means no NSIF was found.
+            pass
+
+        return parsed_data
+
+    def _extract_cl_message(self, messages: list) -> dict | None:
+        """Finds the first CL message and returns its parsed dictionary."""
         for msg in messages:
             if msg['type'] == 'CL':
-                return msg['payload']
-        return b''
-
-    def _extract_capabilities(self, messages: list) -> dict:
-        """
-        Extracts key capabilities from the parsed G.hs messages.
-        This focuses on the 'CL' (Capabilities List) from the DSLAM.
-        """
-        capabilities = {}
-        for msg in messages:
-            if msg['type'] == 'CL':
-                # This is a placeholder for a more detailed parser.
-                # A real implementation would parse the TLV parameters.
-                # For example, check for bits indicating VDSL2 profile support.
-                if b'\x81' in msg['parameters']: # Example: Parameter for VDSL2 profiles
-                    capabilities['VDSL2_Profiles'] = "Detected"
-                if b'\x82' in msg['parameters']: # Example: Parameter for Vectoring
-                    capabilities['Vectoring'] = "Detected"
-        return capabilities
+                return msg
+        return None
