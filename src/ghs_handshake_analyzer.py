@@ -96,6 +96,7 @@ class GHSHandshakeAnalyzer:
                 "vdsl2_profiles_bitmap": cl_message.get("vdsl2_profiles_bitmap"),
                 "g_vector_bitmap": cl_message.get("g_vector_bitmap"),
                 "bonding_bitmap": cl_message.get("bonding_bitmap"),
+                "band_plan_id": cl_message.get("band_plan_id"),
                 "full_analysis": cl_message
             })
         else:
@@ -115,7 +116,8 @@ class GHSHandshakeAnalyzer:
 
         parsed_data = {
             "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
-            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None
+            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None,
+            "band_plan_id": None
         }
         try:
             i = 1  # Start after message type
@@ -130,6 +132,15 @@ class GHSHandshakeAnalyzer:
                     if param_len >= 2 and i + 2 + param_len <= len(payload):
                         bitmap_val = int.from_bytes(payload[i + 2:i + 4], 'big')
                         parsed_data["vdsl2_profiles_bitmap"] = bitmap_val
+                    i += 1 + param_len
+                    continue
+
+                # VDSL2 Band Plan (ID 0x84)
+                if param_id == 0x84 and i + 2 < len(payload):
+                    param_len = payload[i + 1]
+                    if param_len >= 1 and i + 2 + param_len <= len(payload):
+                        # The band plan is usually the first byte of the value
+                        parsed_data["band_plan_id"] = payload[i + 2]
                     i += 1 + param_len
                     continue
 

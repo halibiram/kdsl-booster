@@ -4,16 +4,12 @@ DSLAM Detection Ultra - Main Execution Script
 This script demonstrates the full end-to-end capabilities of the project's
 DSLAM vendor detection, capability analysis, and reporting system.
 
-It simulates a multi-method detection scenario:
-1. Establishes a (mocked) SSH connection.
-2. Initializes all necessary analyzers.
-3. Mocks responses for G.hs, SNMP, and DNS to simulate finding
-   evidence for a specific vendor (Huawei) and its capabilities.
-4. Runs vendor identification.
-5. Runs VDSL2 profile detection.
-6. Runs Vectoring detection.
-7. Runs Bonding detection.
-8. Initializes and prints comprehensive reports.
+It simulates a multi-method detection scenario for a Huawei DSLAM, covering:
+- Vendor Identification
+- VDSL2 Profile Detection
+- Vectoring Detection
+- Bonding Detection
+- Frequency Capability Detection
 """
 import logging
 import json
@@ -23,6 +19,7 @@ from src.reporting import ReportGenerator
 from src.vdsl_profile_analyzer import VDSLProfileAnalyzer
 from src.vectoring_analyzer import VectoringAnalyzer
 from src.bonding_analyzer import BondingAnalyzer
+from src.frequency_analyzer import FrequencyAnalyzer
 
 # --- Mock Data Configuration ---
 HUAWEI_GHS_ANALYSIS = {
@@ -30,7 +27,8 @@ HUAWEI_GHS_ANALYSIS = {
     "handshake_duration": 195.0,
     "vdsl2_profiles_bitmap": 81,  # 17a, 12a, 8a
     "g_vector_bitmap": 1,         # G.vector supported
-    "bonding_bitmap": 3           # G.998.1 (ATM) & G.998.2 (Ethernet) supported
+    "bonding_bitmap": 3,          # G.998.1 (ATM) & G.998.2 (Ethernet)
+    "band_plan_id": 32            # ADLU-32 (Annex A, 17a)
 }
 HUAWEI_SNMP_SYS_OID = "1.3.6.1.4.1.2011.2.82.8"
 HUAWEI_VDSL_PROFILES_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.20"
@@ -39,19 +37,18 @@ HUAWEI_VECTORING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.22"
 HUAWEI_VECTORING_STATUS_RESPONSE = "INTEGER: 1"  # Active
 HUAWEI_BONDING_STATUS_OID = "1.3.6.1.4.1.2011.5.14.8.1.1.1"
 HUAWEI_BONDING_STATUS_RESPONSE = "INTEGER: 1"  # Active
+HUAWEI_MAX_FREQUENCY_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.15"
+HUAWEI_MAX_FREQUENCY_RESPONSE = "INTEGER: 17664" # 17.664 MHz
 HUAWEI_DNS_HOSTNAME = "dslam-ma5608t-london.huawei.isp.com"
 
 
 def mock_snmp_executor(command: str) -> tuple[str, str]:
     """Mocks the SSH execute_command for SNMP, routing to the correct response."""
-    if HUAWEI_VDSL_PROFILES_OID in command:
-        return HUAWEI_VDSL_PROFILES_RESPONSE, ""
-    if HUAWEI_VECTORING_STATUS_OID in command:
-        return HUAWEI_VECTORING_STATUS_RESPONSE, ""
-    if HUAWEI_BONDING_STATUS_OID in command:
-        return HUAWEI_BONDING_STATUS_RESPONSE, ""
-    if "1.3.6.1.2.1.1.2.0" in command:  # sysObjectID OID
-        return HUAWEI_SNMP_SYS_OID, ""
+    if HUAWEI_VDSL_PROFILES_OID in command: return HUAWEI_VDSL_PROFILES_RESPONSE, ""
+    if HUAWEI_VECTORING_STATUS_OID in command: return HUAWEI_VECTORING_STATUS_RESPONSE, ""
+    if HUAWEI_BONDING_STATUS_OID in command: return HUAWEI_BONDING_STATUS_RESPONSE, ""
+    if HUAWEI_MAX_FREQUENCY_OID in command: return HUAWEI_MAX_FREQUENCY_RESPONSE, ""
+    if "1.3.6.1.2.1.1.2.0" in command: return HUAWEI_SNMP_SYS_OID, ""
     return "", "Timeout"
 
 
@@ -73,6 +70,7 @@ def main():
     profile_analyzer = VDSLProfileAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     vectoring_analyzer = VectoringAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     bonding_analyzer = BondingAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
+    frequency_analyzer = FrequencyAnalyzer(detector.ghs_analyzer, mock_ssh_interface, signatures)
     print("Components initialized successfully.")
 
     # --- 2. Mocking Detection Method Results ---
@@ -123,8 +121,20 @@ def main():
     else:
         print("❌ Bonding detection failed.")
 
-    # --- 7. Generate and Display Reports ---
-    print("\n[Step 7] Generating and displaying reports...")
+    # --- 7. Run Frequency Detection ---
+    print("\n[Step 7] Running multi-method frequency detection...")
+    freq_result = frequency_analyzer.detect_all_frequency_capabilities(vendor=vendor)
+    if freq_result:
+        ds_mhz = freq_result.get('max_downstream_mhz', 'N/A')
+        us_mhz = freq_result.get('max_upstream_mhz', 'N/A')
+        plan = freq_result.get('band_plan', 'N/A')
+        print(f"✅ Frequency detection complete. Max DS: {ds_mhz}MHz, Max US: {us_mhz}MHz, Band Plan: {plan}")
+        vendor_result['capability_analysis']['frequency'] = freq_result
+    else:
+        print("❌ Frequency detection failed.")
+
+    # --- 8. Generate and Display Reports ---
+    print("\n[Step 8] Generating and displaying reports...")
     report_generator = ReportGenerator(vendor_result)
 
     print("\n\n" + "="*20 + " TEXT REPORT " + "="*20)
