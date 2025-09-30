@@ -2,6 +2,7 @@ import logging
 import json
 import re
 from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
+from src.dhcp_analyzer import DHCPAnalyzer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,6 +33,7 @@ class UniversalDSLAMDetector:
         """
         self.ssh = ssh_interface
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
+        self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
         self.signatures = self._load_signatures(signature_file)
         self.detection_methods = {
             'snmp': self._detect_via_snmp,
@@ -98,7 +100,6 @@ class UniversalDSLAMDetector:
         """
         Performs an SNMP get to find the vendor-specific sysObjectID.
         """
-        # The sysObjectID OID is 1.3.6.1.2.1.1.2.0
         oid_to_query = "1.3.6.1.2.1.1.2.0"
         command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {oid_to_query}"
         logging.info(f"Executing SNMP command: {command}")
@@ -109,8 +110,6 @@ class UniversalDSLAMDetector:
             logging.error(f"SNMP command failed or returned no output. stderr: {stderr}")
             return []
 
-        # Example output: '1.3.6.1.4.1.2011.2.82.8'
-        # We just use the raw output as the OID
         returned_oid = stdout.strip()
         logging.info(f"SNMP returned OID: {returned_oid}")
 
@@ -130,16 +129,40 @@ class UniversalDSLAMDetector:
 
 
     def _detect_via_dhcp(self) -> list:
-        """Simulated DHCP detection, returning a result with high confidence."""
-        command = "echo 'vendor-class-identifier \"ALIN\"'"
-        stdout, _ = self.ssh.execute_command(command)
-        if "ALIN" in stdout:
-            return [{
-                "vendor": "nokia_alcatel",
-                "confidence": self.DHCP_MATCH_SCORE,
-                "description": "DHCP Option 125 match",
-                "method": "dhcp"
-            }]
+        """
+        Analyzes DHCP Option 82 to identify the vendor via the Circuit ID format.
+        """
+        logging.info("Attempting to identify vendor via DHCP Option 82 analysis.")
+        analysis = self.dhcp_analyzer.capture_and_analyze()
+
+        if not analysis or 'circuit_id' not in analysis:
+            logging.warning("DHCP analysis did not yield a Circuit ID.")
+            return []
+
+        circuit_id = analysis['circuit_id']
+        # The circuit_id is often bytes, so decode for regex matching
+        try:
+            circuit_id_str = circuit_id.decode('ascii', errors='ignore')
+        except:
+            logging.warning(f"Could not decode Circuit ID: {circuit_id}")
+            return []
+
+        logging.info(f"DHCP analysis yielded Circuit ID: {circuit_id_str}")
+
+        for vendor, data in self.signatures.items():
+            dhcp_sig = data.get('dhcp', {})
+            if 'circuit_id_pattern' in dhcp_sig:
+                pattern = dhcp_sig['circuit_id_pattern']
+                if re.match(pattern, circuit_id_str):
+                    logging.info(f"Matched DHCP Circuit ID for vendor: {vendor}")
+                    return [{
+                        "vendor": vendor,
+                        "confidence": self.DHCP_MATCH_SCORE,
+                        "description": f"DHCP Circuit ID match (pattern: {pattern})",
+                        "method": "dhcp"
+                    }]
+
+        logging.warning("DHCP Circuit ID did not match any known vendor patterns.")
         return []
 
     def _calculate_ghs_confidence(self, analysis: dict) -> list:
@@ -163,16 +186,11 @@ class UniversalDSLAMDetector:
             ghs_data = data.get('ghs', {})
             for sig in ghs_data.get('signatures', []):
                 score = 0
-                # 1. Check for a strong match on Vendor ID
                 if sig.get('vendor_id') == analyzed_vendor_id:
                     score += self.VENDOR_ID_MATCH_SCORE
-
-                # 2. Check for VSI patterns
                 for pattern in sig.get('vsi_patterns', []):
                     if pattern in analyzed_vsi_str:
                         score += self.VSI_PATTERN_MATCH_SCORE
-
-                # 3. Check for a raw payload match as a fallback
                 pattern_hex = sig.get('cl_payload_pattern')
                 if pattern_hex and analyzed_payload.startswith(bytes.fromhex(pattern_hex)):
                     score += self.PAYLOAD_MATCH_SCORE
@@ -180,7 +198,7 @@ class UniversalDSLAMDetector:
                 if score > 0:
                     results.append({
                         "vendor": vendor,
-                        "confidence": min(score, 100), # Cap score at 100
+                        "confidence": min(score, 100),
                         "description": sig.get('description'),
                         "method": "g_hs"
                     })
