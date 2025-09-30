@@ -40,7 +40,7 @@ def main():
 
     # Initialize the core components
     manipulator = KernelDSLManipulator(ssh_interface=mock_ssh_interface)
-    experiment_runner = ExperimentRunner(manipulator=manipulator)
+    experiment_runner = ExperimentRunner(manipulator=manipulator, ssh_interface=mock_ssh_interface)
     ai_optimizer = AIOptimizer()
     print("Components initialized successfully.")
 
