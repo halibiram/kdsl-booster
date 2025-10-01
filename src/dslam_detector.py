@@ -6,6 +6,8 @@ from src.ghs_handshake_analyzer import GHSHandshakeAnalyzer
 from src.dhcp_analyzer import DHCPAnalyzer
 from src.dns_analyzer import DNSAnalyzer
 from src.tr069_analyzer import TR069Analyzer
+from src.snmp_manager import SNMPManager
+from src.snmp_mib_library import SYSTEM_OIDS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,17 +33,23 @@ class UniversalDSLAMDetector:
     # A final score must be above this threshold to be considered a valid result.
     FINAL_CONFIDENCE_THRESHOLD = 10
 
-    def __init__(self, ssh_interface, db_manager):
+    def __init__(self, target_ip, community_string, db_manager, ssh_interface=None):
         """
-        Initializes the detector with an SSH interface and a database manager.
+        Initializes the detector.
         """
-        self.ssh = ssh_interface
+        self.target_ip = target_ip
+        self.community_string = community_string
         self.db_manager = db_manager
         self.signatures = self.db_manager.get_all_signatures()
+        self.ssh = ssh_interface # Keep for non-SNMP methods
+
+        # Initialize analyzers
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
         self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
         self.dns_analyzer = DNSAnalyzer()
         self.tr069_analyzer = TR069Analyzer(ssh_interface)
+        self.snmp_manager = SNMPManager(host=target_ip, community=community_string)
+
         self.detection_methods = {
             'g_hs': self._detect_via_g_hs,
             'snmp': self._detect_via_snmp,
@@ -148,23 +156,23 @@ class UniversalDSLAMDetector:
                 findings.append({"vendor": vendor, "certainty": 100, "method": "timing", "raw_data": f"{duration:.2f}ms"})
         return findings
 
-    def _detect_via_snmp(self, target_ip: str = '192.168.1.1', community: str = 'public') -> list:
-        oid_to_query = "1.3.6.1.2.1.1.2.0"
-        command = f"snmpget -v2c -c {community} -t 1 -O vq {target_ip} {oid_to_query}"
-        try:
-            stdout, stderr = self.ssh.execute_command(command)
-            if not stdout or (stderr and "timeout" not in stderr.lower()):
-                if stderr: logging.warning(f"SNMP command execution failed or returned an error: {stderr.strip()}")
-                return []
-        except Exception as e:
-            logging.error(f"An exception occurred while executing SNMP command: {e}", exc_info=True)
+    def _detect_via_snmp(self) -> list:
+        """
+        Detects the DSLAM vendor using SNMP by querying the sysObjectID.
+        """
+        sys_object_id = self.snmp_manager.get(SYSTEM_OIDS['sysObjectID'])
+
+        if not sys_object_id:
+            logging.warning("SNMP detection failed: Could not retrieve sysObjectID.")
             return []
 
-        returned_oid = stdout.strip()
+        # The returned OID might be prefixed, so we check if our known OIDs are a substring
         for vendor, data in self.signatures.items():
             snmp_sig = data.get('snmp', {})
-            if 'sysObjectID' in snmp_sig and returned_oid.startswith(snmp_sig['sysObjectID']):
-                return [{"vendor": vendor, "certainty": 100, "method": "snmp", "raw_data": returned_oid}]
+            if 'sysObjectID' in snmp_sig and snmp_sig['sysObjectID'] in sys_object_id:
+                return [{"vendor": vendor, "certainty": 100, "method": "snmp", "raw_data": sys_object_id}]
+
+        logging.info(f"No matching SNMP signature found for sysObjectID: {sys_object_id}")
         return []
 
     def _detect_via_dhcp(self) -> list:
