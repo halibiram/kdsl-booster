@@ -228,6 +228,55 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def run_selt(self) -> dict:
+        """
+        Initiates a Single-Ended Line Test (SELT) and returns the results.
+        SELT provides information about line length and potential issues.
+        Returns:
+            A dictionary containing SELT results, such as line length and fault locations.
+        """
+        pass
+
+    @abstractmethod
+    def run_melt(self) -> dict:
+        """
+        Initiates a Metallic Line Test (MELT) to check physical line characteristics.
+        This test usually requires the line to be in a non-operational state.
+        Returns:
+            A dictionary with measurements like voltage, resistance, and capacitance.
+        """
+        pass
+
+    @abstractmethod
+    def run_delt(self) -> dict:
+        """
+        Initiates a Dual-Ended Line Test (DELT).
+        This is a comprehensive test that requires coordination with the DSLAM.
+        Returns:
+            A dictionary containing detailed line state information from both ends.
+        """
+        pass
+
+    @abstractmethod
+    def get_qln_data(self) -> dict[int, float] | None:
+        """
+        Retrieves the Quiet Line Noise (QLN) measurement on a per-tone basis.
+        This represents the noise floor when the line is idle.
+        Returns:
+            A dictionary mapping tone index to noise power in dBm/Hz, or None on failure.
+        """
+        pass
+
+    @abstractmethod
+    def get_hlog_data(self) -> dict[int, float] | None:
+        """
+        Retrieves the Hlog data (per-tone channel characteristics/attenuation).
+        Returns:
+            A dictionary mapping tone index to attenuation in dB, or None on failure.
+        """
+        pass
+
 
 class BroadcomDslHal(DslHalBase):
     """
@@ -542,6 +591,39 @@ class BroadcomDslHal(DslHalBase):
         logging.info(f"Successfully set bit-swap state to {state}.")
         return True
 
+    def run_selt(self) -> dict:
+        logging.warning("SELT is not yet implemented for Broadcom HAL.")
+        # Command might be: f"{self.driver_path} diag --selt"
+        return {"status": "unsupported", "message": "SELT not implemented for this hardware."}
+
+    def run_melt(self) -> dict:
+        logging.warning("MELT is not yet implemented for Broadcom HAL.")
+        # Command might be: f"{self.driver_path} diag --melt"
+        return {"status": "unsupported", "message": "MELT not implemented for this hardware."}
+
+    def run_delt(self) -> dict:
+        logging.warning("DELT is not yet implemented for Broadcom HAL.")
+        # Command might be: f"{self.driver_path} diag --delt"
+        return {"status": "unsupported", "message": "DELT not implemented for this hardware."}
+
+    def get_qln_data(self) -> dict[int, float] | None:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return None
+        logging.warning("QLN data retrieval is not yet implemented for Broadcom HAL, returning mock data.")
+        # Hypothetical command: f"{self.driver_path} info --show --qln"
+        # Returning mock data for tones 0-10
+        return {i: -135.0 + (i % 5) for i in range(10)}
+
+    def get_hlog_data(self) -> dict[int, float] | None:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return None
+        logging.warning("Hlog data retrieval is not yet implemented for Broadcom HAL, returning mock data.")
+        # Hypothetical command: f"{self.driver_path} info --show --hlog"
+        # Returning mock data for tones 0-10
+        return {i: 5.0 + i * 0.5 for i in range(10)}
+
 
 class LantiqDslHal(DslHalBase):
     """
@@ -816,6 +898,39 @@ class LantiqDslHal(DslHalBase):
             return False
         logging.info(f"Successfully set bit-swap state to {'enabled' if enabled else 'disabled'}.")
         return True
+
+    def run_selt(self) -> dict:
+        logging.warning("SELT is not yet implemented for Lantiq HAL.")
+        # Command might be: f"echo 1 > {self.driver_path}/diag/selt_trigger"
+        return {"status": "unsupported", "message": "SELT not implemented for this hardware."}
+
+    def run_melt(self) -> dict:
+        logging.warning("MELT is not yet implemented for Lantiq HAL.")
+        # Command might be: f"echo 1 > {self.driver_path}/diag/melt_trigger"
+        return {"status": "unsupported", "message": "MELT not implemented for this hardware."}
+
+    def run_delt(self) -> dict:
+        logging.warning("DELT is not yet implemented for Lantiq HAL.")
+        # Command might be: f"echo 1 > {self.driver_path}/diag/delt_trigger"
+        return {"status": "unsupported", "message": "DELT not implemented for this hardware."}
+
+    def get_qln_data(self) -> dict[int, float] | None:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return None
+        logging.warning("QLN data retrieval is not yet implemented for Lantiq HAL, returning mock data.")
+        # Hypothetical command: f"cat {self.driver_path}/diag/qln_data"
+        # Returning mock data for tones 0-10
+        return {i: -138.0 + (i % 5) for i in range(10)}
+
+    def get_hlog_data(self) -> dict[int, float] | None:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return None
+        logging.warning("Hlog data retrieval is not yet implemented for Lantiq HAL, returning mock data.")
+        # Hypothetical command: f"cat {self.driver_path}/diag/hlog_data"
+        # Returning mock data for tones 0-10
+        return {i: 4.0 + i * 0.6 for i in range(10)}
 
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.

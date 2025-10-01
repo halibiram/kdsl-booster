@@ -16,6 +16,10 @@ from src.vectoring_analyzer import VectoringAnalyzer
 from src.vectoring_manipulator import VectoringManipulator
 from src.entware_ssh import EntwareSSHInterface
 from src.spoofing import KernelDSLManipulator
+from src.line_diagnostics import LineDiagnostics
+from src.keenetic_dsl_interface import KeeneticDSLInterface
+import json
+
 
 def run_pipeline(args):
     """Runs the main exploitation pipeline."""
@@ -181,6 +185,20 @@ def main():
     parser_cpe.add_argument('--port', type=int, default=7547, help='Port of the ACS.')
     parser_cpe.set_defaults(func=run_cpe_emulator)
 
+    # Diagnostics mode
+    parser_diag = subparsers.add_parser('diagnostics', help='Run DSL line diagnostic tests.')
+    parser_diag.add_argument('target_ip', help='The IP address of the target device (used for context).')
+    parser_diag.add_argument(
+        '--test',
+        choices=['selt', 'melt', 'delt', 'qln', 'hlog'],
+        required=True,
+        help='The diagnostic test to run.'
+    )
+    parser_diag.add_argument('--profile', choices=['17a', '35b'], default='17a', help='VDSL2 profile for physics calculations (for hlog).')
+    parser_diag.add_argument('--distance', type=int, default=300, help='Estimated distance in meters for hlog analysis.')
+    parser_diag.add_argument('--output', type=str, help='Optional file path to save the JSON results.')
+    parser_diag.set_defaults(func=run_diagnostics)
+
     # DMT Manipulation mode
     parser_dmt = subparsers.add_parser('dmt', help='Run direct DMT (Discrete Multi-Tone) manipulations.')
     parser_dmt.add_argument('target_ip', help='The IP address of the target device (used for context).')
@@ -243,6 +261,68 @@ def run_dmt_manipulation(args):
         manipulator.optimize_tone_allocation(target_distance_m=args.optimize_distance)
 
     print("\n🎉 DMT manipulation run finished. 🎉")
+
+def run_diagnostics(args):
+    """Runs the DSL line diagnostics."""
+    print("🚀 Initializing DSL Line Diagnostics Subsystem 🚀")
+
+    # --- Setup ---
+    # Use a mock SSH interface that simulates a Keenetic Giga (Broadcom) for demonstration
+    ssh_interface = MagicMock(spec=EntwareSSHInterface)
+    def mock_ssh_executor(command, timeout=None):
+        if "cat /proc/device-tree/model" in command:
+            return "Keenetic Giga (KN-1010)", ""
+        if "command -v xdslctl" in command:
+            return "/usr/bin/xdslctl", ""
+        return "", ""
+    ssh_interface.execute_command.side_effect = mock_ssh_executor
+
+    try:
+        # Get the appropriate HAL for the detected device
+        dsl_interface = KeeneticDSLInterface(ssh_interface)
+        hal = dsl_interface.get_hal()
+        if not hal:
+            print(f"❌ Failed to initialize HAL. Aborting.")
+            return
+
+        diagnostics = LineDiagnostics(hal, profile=args.profile)
+        print(f"✅ Diagnostics initialized with {hal.__class__.__name__} HAL.")
+
+    except (RuntimeError, ValueError) as e:
+        print(f"❌ Failed to initialize diagnostics: {e}")
+        return
+
+    # --- Execution ---
+    result = None
+    if args.test == 'selt':
+        result = diagnostics.run_selt()
+    elif args.test == 'melt':
+        result = diagnostics.run_melt()
+    elif args.test == 'delt':
+        result = diagnostics.run_delt()
+    elif args.test == 'qln':
+        result = diagnostics.analyze_qln()
+    elif args.test == 'hlog':
+        result = diagnostics.analyze_hlog(estimated_distance_m=args.distance)
+    else:
+        print(f"❌ Unknown test: {args.test}")
+        return
+
+    # --- Output ---
+    if result:
+        print("\n--- Diagnostic Results ---")
+        print(json.dumps(result, indent=2))
+        print("------------------------")
+
+        if args.output:
+            try:
+                with open(args.output, 'w') as f:
+                    json.dump(result, f, indent=2)
+                print(f"✅ Results saved to {args.output}")
+            except IOError as e:
+                print(f"❌ Failed to save results to {args.output}: {e}")
+
+    print("\n🎉 Diagnostics run finished. 🎉")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
