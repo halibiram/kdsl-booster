@@ -166,6 +166,49 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_bitloading_table(self) -> dict[int, int] | None:
+        """
+        Retrieves the bit-loading table (bits per tone).
+        Returns:
+            A dictionary mapping tone index to bits, or None on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_bitloading_table(self, bit_table: dict[int, int]) -> bool:
+        """
+        Applies a custom bit-loading table.
+        Args:
+            bit_table: A dictionary mapping tone index to the number of bits.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_tone_activation(self, tone_map: dict[int, bool]) -> bool:
+        """
+        Activates or deactivates specific tones.
+        Args:
+            tone_map: A dictionary mapping a tone index to a boolean (True=on, False=off).
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_subcarrier_spacing(self, spacing_khz: float) -> bool:
+        """
+        Sets the sub-carrier spacing.
+        Args:
+            spacing_khz: The desired sub-carrier spacing in kHz.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+
 class BroadcomDslHal(DslHalBase):
     """
     HAL for Broadcom DSL chipsets (e.g., BCM63xx series).
@@ -388,6 +431,67 @@ class BroadcomDslHal(DslHalBase):
             logging.error(f"Could not parse pilot sequence from output: {stdout}")
             return None
 
+    def get_bitloading_table(self) -> dict[int, int] | None:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return None
+        # Hypothetical command to dump bit-loading table in a 'tone:bits' format.
+        command = f"{self.driver_path} info --show --bitloading"
+        stdout, stderr = self.ssh.execute_command(command)
+        if stderr or not stdout:
+            logging.error(f"Failed to get Broadcom bit-loading table: {stderr}")
+            return None
+        try:
+            table = {}
+            for line in stdout.splitlines():
+                parts = line.split(':')
+                table[int(parts[0])] = int(parts[1])
+            return table
+        except (ValueError, IndexError):
+            logging.error(f"Could not parse bit-loading table from output: {stdout}")
+            return None
+
+    def set_bitloading_table(self, bit_table: dict[int, int]) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        # Hypothetical command to apply a custom bit-loading table.
+        # The table is provided as a comma-separated list of 'tone:bits' pairs.
+        table_str = ",".join([f"{tone}:{bits}" for tone, bits in bit_table.items()])
+        command = f"{self.driver_path} configure --bitloading \"{table_str}\""
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom bit-loading table: {stderr}")
+            return False
+        return True
+
+    def set_tone_activation(self, tone_map: dict[int, bool]) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        # Hypothetical command to activate/deactivate tones.
+        # Active tones are listed, inactive tones are omitted.
+        active_tones = ",".join([str(tone) for tone, is_active in tone_map.items() if is_active])
+        command = f"{self.driver_path} configure --tones \"{active_tones}\""
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom tone activation: {stderr}")
+            return False
+        return True
+
+    def set_subcarrier_spacing(self, spacing_khz: float) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        # Hypothetical command to set sub-carrier spacing.
+        command = f"{self.driver_path} configure --spacing {spacing_khz}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom sub-carrier spacing: {stderr}")
+            return False
+        return True
+
+
 class LantiqDslHal(DslHalBase):
     """
     HAL for Lantiq (now Intel) DSL chipsets (e.g., VRX208/VRX288).
@@ -580,6 +684,61 @@ class LantiqDslHal(DslHalBase):
         except ValueError:
             logging.error(f"Could not parse pilot sequence from Lantiq output: {stdout}")
             return None
+
+    def get_bitloading_table(self) -> dict[int, int] | None:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return None
+        # Hypothetical sysfs node for reading the bit-loading table.
+        command = f"cat {self.driver_path}/bitloading_table"
+        stdout, stderr = self.ssh.execute_command(command)
+        if stderr or not stdout:
+            logging.error(f"Failed to read Lantiq bit-loading table: {stderr}")
+            return None
+        try:
+            table = {}
+            for line in stdout.splitlines():
+                parts = line.split()
+                table[int(parts[0])] = int(parts[1])
+            return table
+        except (ValueError, IndexError):
+            logging.error(f"Could not parse bit-loading table from Lantiq output: {stdout}")
+            return None
+
+    def set_bitloading_table(self, bit_table: dict[int, int]) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        # Hypothetical sysfs node for writing a custom bit-loading table.
+        table_str = "\\n".join([f"{tone} {bits}" for tone, bits in bit_table.items()])
+        command = f"echo -e \"{table_str}\" > {self.driver_path}/bitloading_table_override"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq bit-loading table: {stderr}")
+            return False
+        return True
+
+    def set_tone_activation(self, tone_map: dict[int, bool]) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        # Hypothetical sysfs node for controlling tone activation.
+        # Format could be a bitmask or a list of ranges.
+        active_mask = 0
+        for tone, is_active in tone_map.items():
+            if is_active:
+                active_mask |= (1 << tone)
+        command = f"echo {active_mask} > {self.driver_path}/tone_activation_mask"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq tone activation: {stderr}")
+            return False
+        return True
+
+    def set_subcarrier_spacing(self, spacing_khz: float) -> bool:
+        logging.error("Sub-carrier spacing manipulation is not typically supported on Lantiq chipsets.")
+        raise NotImplementedError("Lantiq HAL does not support set_subcarrier_spacing.")
+
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {

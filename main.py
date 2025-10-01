@@ -15,6 +15,7 @@ from src.hal.broadcom import BroadcomDslHal
 from src.vectoring_analyzer import VectoringAnalyzer
 from src.vectoring_manipulator import VectoringManipulator
 from src.entware_ssh import EntwareSSHInterface
+from src.spoofing import KernelDSLManipulator
 
 def run_pipeline(args):
     """Runs the main exploitation pipeline."""
@@ -180,8 +181,68 @@ def main():
     parser_cpe.add_argument('--port', type=int, default=7547, help='Port of the ACS.')
     parser_cpe.set_defaults(func=run_cpe_emulator)
 
+    # DMT Manipulation mode
+    parser_dmt = subparsers.add_parser('dmt', help='Run direct DMT (Discrete Multi-Tone) manipulations.')
+    parser_dmt.add_argument('target_ip', help='The IP address of the target device (used for context).')
+    parser_dmt.add_argument('--profile', choices=['17a', '35b'], default='17a', help='VDSL2 profile to use for physics calculations.')
+    parser_dmt.add_argument('--bit-load', type=str, help='Set per-tone bit loading. Format: "tone1:bits1,tone2:bits2"')
+    parser_dmt.add_argument('--disable-tones', type=str, help='Comma-separated list of tone indices to disable.')
+    parser_dmt.add_argument('--enable-tones', type=str, help='Comma-separated list of tone indices to enable.')
+    parser_dmt.add_argument('--spacing', type=float, help='Set sub-carrier spacing in kHz (e.g., 4.3125).')
+    parser_dmt.add_argument('--optimize-tones', action='store_true', help='Run automated tone allocation optimization.')
+    parser_dmt.add_argument('--optimize-distance', type=int, default=100, help='Target distance in meters for tone optimization.')
+    parser_dmt.set_defaults(func=run_dmt_manipulation)
+
     args = parser.parse_args()
     args.func(args)
+
+def run_dmt_manipulation(args):
+    """Runs direct DMT (Discrete Multi-Tone) manipulations."""
+    print("🚀 Initializing DMT Manipulation Subsystem 🚀")
+
+    # --- Setup ---
+    # For demonstration, we use a mock SSH interface that simulates a Keenetic Giga (Broadcom).
+    ssh_interface = MagicMock(spec=EntwareSSHInterface)
+    def mock_ssh_executor(command, timeout=None):
+        if "cat /proc/device-tree/model" in command:
+            return "Keenetic Giga (KN-1010)", ""
+        if "command -v xdslctl" in command:
+            return "/usr/bin/xdslctl", ""
+        return "", ""
+    ssh_interface.execute_command.side_effect = mock_ssh_executor
+
+    try:
+        manipulator = KernelDSLManipulator(ssh_interface, profile=args.profile)
+        print(f"✅ KernelDSLManipulator initialized for profile {args.profile} with {manipulator.hal.__class__.__name__} HAL.")
+    except RuntimeError as e:
+        print(f"❌ Failed to initialize manipulator: {e}")
+        return
+
+    # --- Execution ---
+    if args.bit_load:
+        try:
+            bit_table = {int(p.split(':')[0]): int(p.split(':')[1]) for p in args.bit_load.split(',')}
+            print(f"Applying bit-loading table: {bit_table}")
+            manipulator.set_per_tone_bit_loading(bit_table)
+        except (ValueError, IndexError):
+            print("❌ Invalid format for --bit-load. Use 'tone1:bits1,tone2:bits2'.")
+
+    if args.disable_tones or args.enable_tones:
+        try:
+            disable_list = [int(t) for t in args.disable_tones.split(',')] if args.disable_tones else None
+            enable_list = [int(t) for t in args.enable_tones.split(',')] if args.enable_tones else None
+            manipulator.control_tone_activation(tones_to_disable=disable_list, tones_to_enable=enable_list)
+        except ValueError:
+            print("❌ Invalid format for tone lists. Use comma-separated integers.")
+
+    if args.spacing:
+        manipulator.manipulate_subcarrier_spacing(args.spacing)
+
+    if args.optimize_tones:
+        print(f"Running tone optimization for a simulated distance of {args.optimize_distance}m...")
+        manipulator.optimize_tone_allocation(target_distance_m=args.optimize_distance)
+
+    print("\n🎉 DMT manipulation run finished. 🎉")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
