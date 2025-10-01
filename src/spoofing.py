@@ -6,6 +6,8 @@ parameters like attenuation and SNR. It also provides the high-level classes
 that orchestrate the manipulation of kernel parameters to achieve the desired
 line performance.
 """
+import time
+import logging
 import numpy as np
 
 from src.entware_ssh import EntwareSSHInterface
@@ -145,3 +147,90 @@ class KernelDSLManipulator:
 
         print(f"Manipulation results: {results}")
         return results
+
+    def dynamically_reduce_snr(self, target_snr_floor_db: float, step_db: float = 0.5, step_interval_s: int = 5) -> dict:
+        """
+        Gradually reduces the SNR margin from its current value to a target floor.
+
+        Args:
+            target_snr_floor_db: The lowest SNR margin to attempt.
+            step_db: The amount to decrease the SNR by in each step (in dB).
+            step_interval_s: The time to wait between decrements.
+
+        Returns:
+            A dictionary reporting the final state.
+        """
+        logging.info("Starting dynamic SNR margin reduction...")
+        current_snr = self.hal.get_snr_margin()
+        if current_snr is None:
+            logging.error("Could not retrieve initial SNR margin. Aborting.")
+            return {"success": False, "final_snr": None}
+
+        logging.info(f"Initial SNR: {current_snr:.1f} dB. Target floor: {target_snr_floor_db:.1f} dB.")
+
+        final_snr = current_snr
+        for target_snr in np.arange(current_snr, target_snr_floor_db - step_db, -step_db):
+            logging.info(f"Setting SNR margin to {target_snr:.1f} dB...")
+            snr_register_value = int(target_snr * 10)
+            success = self.hal.set_snr_margin(snr_register_value)
+            if not success:
+                logging.error(f"Failed to set SNR to {target_snr:.1f} dB. Stopping reduction.")
+                break
+            final_snr = target_snr
+            logging.info(f"Waiting for {step_interval_s} seconds...")
+            time.sleep(step_interval_s)
+
+        logging.info(f"Dynamic SNR reduction finished. Final SNR margin: {final_snr:.1f} dB.")
+        return {"success": True, "final_snr": final_snr}
+
+    def adapt_to_line_quality(self, monitoring_duration_s: int = 300, check_interval_s: int = 10, crc_error_threshold: int = 5) -> dict:
+        """
+        Monitors line quality and adaptively adjusts the SNR margin.
+
+        Args:
+            monitoring_duration_s: Total time to run the adaptive loop.
+            check_interval_s: How often to check line stats.
+            crc_error_threshold: Number of new CRC errors per interval that triggers an SNR increase.
+
+        Returns:
+            A dictionary with the final results of the adaptation.
+        """
+        logging.info("Starting adaptive SNR adjustment based on line quality...")
+        start_time = time.time()
+        end_time = start_time + monitoring_duration_s
+
+        initial_stats = self.hal.get_line_stats()
+        last_crc_errors = initial_stats.get('crc_errors', 0)
+
+        while time.time() < end_time:
+            current_snr = self.hal.get_snr_margin()
+            if current_snr is None:
+                logging.warning("Could not get current SNR. Skipping adjustment cycle.")
+                time.sleep(check_interval_s)
+                continue
+
+            current_stats = self.hal.get_line_stats()
+            current_crc_errors = current_stats.get('crc_errors', 0)
+            new_errors = current_crc_errors - last_crc_errors
+
+            logging.info(f"Current SNR: {current_snr:.1f} dB. New CRC errors in last {check_interval_s}s: {new_errors}")
+
+            target_snr = current_snr
+            if new_errors > crc_error_threshold:
+                # Line is unstable, increase SNR margin to stabilize
+                target_snr += 1.0  # Increase by 1 dB for stability
+                logging.warning(f"CRC errors ({new_errors}) exceeded threshold ({crc_error_threshold}). Increasing SNR to {target_snr:.1f} dB.")
+            else:
+                # Line is stable, try to push for more performance
+                target_snr -= 0.2  # Cautiously decrease by 0.2 dB
+                logging.info(f"Line is stable. Cautiously decreasing SNR to {target_snr:.1f} dB.")
+
+            snr_register_value = int(target_snr * 10)
+            self.hal.set_snr_margin(snr_register_value)
+
+            last_crc_errors = current_crc_errors
+            time.sleep(check_interval_s)
+
+        final_snr = self.hal.get_snr_margin()
+        logging.info(f"Adaptive SNR adjustment finished. Final SNR: {final_snr:.1f} dB.")
+        return {"success": True, "final_snr": final_snr}
