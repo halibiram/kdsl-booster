@@ -277,6 +277,41 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def set_bonding_state(self, enabled: bool) -> bool:
+        """
+        Enables or disables G.998.x bonding on the modem.
+        Args:
+            enabled: True to enable bonding, False to disable.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def configure_bonding_group(self, group_id: int, mode: str, line_ids: list[int]) -> bool:
+        """
+        Configures a specific bonding group.
+        Args:
+            group_id: The identifier for the bonding group.
+            mode: The bonding mode ('atm' or 'ethernet').
+            line_ids: A list of physical line IDs to include in the group.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_bonding_differential_delay(self, delay_ms: int) -> bool:
+        """
+        Sets the differential delay compensation for a bonding group.
+        Args:
+            delay_ms: The maximum differential delay to compensate for, in milliseconds.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
 
 class BroadcomDslHal(DslHalBase):
     """
@@ -624,6 +659,44 @@ class BroadcomDslHal(DslHalBase):
         # Returning mock data for tones 0-10
         return {i: 5.0 + i * 0.5 for i in range(10)}
 
+    def set_bonding_state(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        state = "on" if enabled else "off"
+        command = f"{self.driver_path} configure --bonding {state}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom bonding state: {stderr}")
+            return False
+        logging.info(f"Broadcom bonding state set to {state}.")
+        return True
+
+    def configure_bonding_group(self, group_id: int, mode: str, line_ids: list[int]) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        lines_str = ",".join(map(str, line_ids))
+        command = f"{self.driver_path} bonding --configure-group {group_id} --mode {mode} --lines {lines_str}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to configure Broadcom bonding group: {stderr}")
+            return False
+        logging.info(f"Configured Broadcom bonding group {group_id} with mode {mode} and lines {lines_str}.")
+        return True
+
+    def set_bonding_differential_delay(self, delay_ms: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        command = f"{self.driver_path} bonding --set-delay {delay_ms}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom bonding differential delay: {stderr}")
+            return False
+        logging.info(f"Set Broadcom bonding differential delay to {delay_ms} ms.")
+        return True
+
 
 class LantiqDslHal(DslHalBase):
     """
@@ -931,6 +1004,45 @@ class LantiqDslHal(DslHalBase):
         # Hypothetical command: f"cat {self.driver_path}/diag/hlog_data"
         # Returning mock data for tones 0-10
         return {i: 4.0 + i * 0.6 for i in range(10)}
+
+    def set_bonding_state(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        state = "1" if enabled else "0"
+        command = f"echo {state} > {self.driver_path}/bonding_enable"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq bonding state: {stderr}")
+            return False
+        logging.info(f"Lantiq bonding state set to {'enabled' if enabled else 'disabled'}.")
+        return True
+
+    def configure_bonding_group(self, group_id: int, mode: str, line_ids: list[int]) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        lines_str = ",".join(map(str, line_ids))
+        # Example: echo "0,atm,0,1" > /sys/class/dsl/dsl0/bonding_group_config
+        command = f"echo '{group_id},{mode},{lines_str}' > {self.driver_path}/bonding_group_config"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to configure Lantiq bonding group: {stderr}")
+            return False
+        logging.info(f"Configured Lantiq bonding group {group_id}.")
+        return True
+
+    def set_bonding_differential_delay(self, delay_ms: int) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        command = f"echo {delay_ms} > {self.driver_path}/bonding_differential_delay_max"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq bonding differential delay: {stderr}")
+            return False
+        logging.info(f"Set Lantiq bonding differential delay to {delay_ms} ms.")
+        return True
 
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.

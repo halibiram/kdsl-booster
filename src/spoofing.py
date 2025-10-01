@@ -17,6 +17,7 @@ from src.keenetic_dsl_interface import KeeneticDSLInterface
 from src.advanced_dsl_physics import AdvancedDSLPhysics
 from src.ghs_packet_crafter import craft_fake_cl_message
 from src.sra_controller import SRAController
+from src.bonding_exploiter import BondingExploiter
 
 
 class GHSHandshakeSpoofer:
@@ -89,6 +90,7 @@ class KernelDSLManipulator:
         self.dsl_interface_factory = KeeneticDSLInterface(ssh_interface)
         self.hal = self.dsl_interface_factory.get_hal()
         self.physics = AdvancedDSLPhysics(profile=profile)
+        self.bonding_exploiter = BondingExploiter(self.hal) if self.hal else None
 
         if not self.hal:
             raise RuntimeError("Failed to detect Keenetic hardware or initialize HAL. Cannot proceed.")
@@ -601,7 +603,7 @@ class KernelDSLManipulator:
 
     def control_tone_activation(self, tone_map: dict[int, bool]) -> bool:
         """
-        Applies a complete activation map for DMT tones.
+        Applies a complete activation map for DMT (Discrete Multi-Tone) tones.
 
         Args:
             tone_map: A dictionary mapping a tone index to a boolean (True=on, False=off).
@@ -785,3 +787,50 @@ class KernelDSLManipulator:
 
         logging.info(f"Persistent optimization finished. Total re-optimizations: {reoptimizations_triggered}.")
         return {"success": True, "reoptimizations": reoptimizations_triggered}
+
+    def exploit_bonding(self, enable_bonding: bool, group_id: int, mode: str, line_ids: list[int], delay_ms: int) -> dict:
+        """
+        Orchestrates a bonding exploitation scenario.
+
+        Args:
+            enable_bonding: Whether to enable or disable bonding.
+            group_id: The ID of the bonding group to configure.
+            mode: The bonding mode ('atm' or 'ethernet').
+            line_ids: A list of line IDs to include in the group.
+            delay_ms: The differential delay compensation in milliseconds.
+
+        Returns:
+            A dictionary reporting the success of the operations.
+        """
+        if not self.bonding_exploiter:
+            logging.error("Bonding exploiter is not initialized.")
+            return {"success": False}
+
+        logging.info("Starting bonding exploitation...")
+        results = {}
+
+        # 1. Enable or disable bonding
+        bonding_state_success = self.bonding_exploiter.control_bonding(enable_bonding)
+        results["bonding_state_set"] = bonding_state_success
+        if not bonding_state_success:
+            logging.error("Failed to set bonding state. Aborting exploitation.")
+            return results
+
+        if enable_bonding:
+            # 2. Configure the bonding group
+            config_success = self.bonding_exploiter.configure_bonding(group_id, mode, line_ids)
+            results["bonding_group_configured"] = config_success
+            if not config_success:
+                logging.error("Failed to configure bonding group. Aborting exploitation.")
+                return results
+
+            # 3. Optimize packet reordering
+            delay_success = self.bonding_exploiter.optimize_packet_reordering(delay_ms)
+            results["differential_delay_set"] = delay_success
+
+            # 4. Attempt to bypass single-ended detection
+            bypass_success = self.bonding_exploiter.bypass_single_ended_detection()
+            results["bypass_attempted"] = bypass_success
+
+        logging.info(f"Bonding exploitation finished. Results: {results}")
+        return results

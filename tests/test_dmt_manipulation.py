@@ -39,9 +39,9 @@ def test_set_per_tone_bit_loading_invalid_bits(manipulator, mock_hal):
 
 def test_control_tone_activation(manipulator, mock_hal):
     """Verify that control_tone_activation calls the HAL with the correct map."""
-    manipulator.control_tone_activation(tones_to_disable=[10, 20], tones_to_enable=[30])
-    expected_map = {10: False, 20: False, 30: True}
-    mock_hal.set_tone_activation.assert_called_once_with(expected_map)
+    tone_map = {10: False, 20: False, 30: True}
+    manipulator.control_tone_activation(tone_map)
+    mock_hal.set_tone_activation.assert_called_once_with(tone_map)
 
 def test_manipulate_subcarrier_spacing(manipulator, mock_hal):
     """Verify that manipulate_subcarrier_spacing calls the HAL with the correct value."""
@@ -64,7 +64,8 @@ def test_optimize_tone_allocation(manipulator, mock_hal, mocker):
 
     # 3. Verify the HAL calls
     # Tones with SNR < 6.0 dB should be disabled. In our mock, tone 103 (4.0 dB).
-    mock_hal.set_tone_activation.assert_called_once_with({103: False})
+    expected_map = {100: True, 101: True, 102: True, 103: False}
+    mock_hal.set_tone_activation.assert_called_once_with(expected_map)
 
     # The bit-loading table should reflect the calculated bits for each tone.
     # We expect tones 100, 101, 102 to have bits, and 103 to have 0.
@@ -85,5 +86,5 @@ def test_dmt_methods_handle_notimplemented(manipulator, mock_hal):
     mock_hal.set_subcarrier_spacing.side_effect = NotImplementedError
 
     assert not manipulator.set_per_tone_bit_loading({100: 10})
-    assert not manipulator.control_tone_activation(tones_to_disable=[10])
+    assert not manipulator.control_tone_activation({10: False})
     assert not manipulator.manipulate_subcarrier_spacing(4.3125)
