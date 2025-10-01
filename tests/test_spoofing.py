@@ -90,3 +90,47 @@ def test_manipulator_raises_error_on_hal_failure(mocker):
     # Expect a RuntimeError during initialization
     with pytest.raises(RuntimeError, match="Failed to detect Keenetic hardware or initialize HAL"):
         KernelDSLManipulator(ssh_interface=mock_ssh)
+
+def test_exploit_bonding_enables_and_configures(manipulator_setup):
+    """
+    Tests that exploit_bonding correctly orchestrates enabling and configuring bonding.
+    """
+    manipulator, _, _, _ = manipulator_setup
+    manipulator.bonding_exploiter = MagicMock()
+
+    # --- Execute the method ---
+    manipulator.exploit_bonding(
+        enable_bonding=True,
+        group_id=1,
+        mode='ethernet',
+        line_ids=[0, 1],
+        delay_ms=15
+    )
+
+    # --- Assertions ---
+    manipulator.bonding_exploiter.control_bonding.assert_called_once_with(True)
+    manipulator.bonding_exploiter.configure_bonding.assert_called_once_with(1, 'ethernet', [0, 1])
+    manipulator.bonding_exploiter.optimize_packet_reordering.assert_called_once_with(15)
+    manipulator.bonding_exploiter.bypass_single_ended_detection.assert_called_once()
+
+def test_exploit_bonding_disables(manipulator_setup):
+    """
+    Tests that exploit_bonding correctly orchestrates disabling bonding.
+    """
+    manipulator, _, _, _ = manipulator_setup
+    manipulator.bonding_exploiter = MagicMock()
+
+    # --- Execute the method ---
+    manipulator.exploit_bonding(
+        enable_bonding=False,
+        group_id=1,
+        mode='ethernet',
+        line_ids=[],
+        delay_ms=15
+    )
+
+    # --- Assertions ---
+    manipulator.bonding_exploiter.control_bonding.assert_called_once_with(False)
+    manipulator.bonding_exploiter.configure_bonding.assert_not_called()
+    manipulator.bonding_exploiter.optimize_packet_reordering.assert_not_called()
+    manipulator.bonding_exploiter.bypass_single_ended_detection.assert_not_called()

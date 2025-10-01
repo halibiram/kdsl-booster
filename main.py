@@ -21,6 +21,56 @@ from src.keenetic_dsl_interface import KeeneticDSLInterface
 import json
 
 
+def run_bonding_exploit(args):
+    """Runs the G.998.x bonding exploitation."""
+    print("🚀 Initializing G.998.x Bonding Exploitation Subsystem 🚀")
+
+    # --- Setup ---
+    # In a real scenario, this would require credentials.
+    # For now, we connect to the specified target IP.
+    try:
+        ssh_interface = EntwareSSHInterface(host=args.target_ip)
+        manipulator = KernelDSLManipulator(ssh_interface)
+        print(f"✅ KernelDSLManipulator initialized with {manipulator.hal.__class__.__name__} HAL.")
+    except Exception as e:
+        print(f"❌ Failed to initialize manipulator: {e}")
+        return
+
+    # --- Argument Validation ---
+    if args.enable and args.disable:
+        print("❌ Cannot use --enable and --disable simultaneously.")
+        return
+    if not args.enable and not args.disable:
+        print("❌ You must specify either --enable or --disable.")
+        return
+
+    enable_bonding = args.enable
+    line_ids = []
+    if enable_bonding:
+        if not args.line_ids:
+            print("❌ --line-ids are required when enabling bonding.")
+            return
+        try:
+            line_ids = [int(i) for i in args.line_ids.split(',')]
+        except ValueError:
+            print("❌ Invalid format for --line-ids. Use comma-separated integers.")
+            return
+
+    # --- Execution ---
+    results = manipulator.exploit_bonding(
+        enable_bonding=enable_bonding,
+        group_id=args.group_id,
+        mode=args.mode,
+        line_ids=line_ids,
+        delay_ms=args.delay_ms
+    )
+
+    print("\n--- Bonding Exploitation Results ---")
+    print(json.dumps(results, indent=2))
+    print("---------------------------------")
+    print("\n🎉 Bonding exploitation run finished. 🎉")
+
+
 def run_pipeline(args):
     """Runs the main exploitation pipeline."""
     print(f"🚀 Initializing DSL Bypass Ultra v1.1 - Pipeline Mode (Strategy: {args.strategy}) 🚀")
@@ -216,6 +266,17 @@ def main():
     parser_dmt.add_argument('--optimize-tones', action='store_true', help='Run automated tone allocation optimization.')
     parser_dmt.add_argument('--optimize-distance', type=int, default=100, help='Target distance in meters for tone optimization.')
     parser_dmt.set_defaults(func=run_dmt_manipulation)
+
+    # Bonding Exploitation mode
+    parser_bonding = subparsers.add_parser('bonding', help='Run G.998.x bonding exploitation.')
+    parser_bonding.add_argument('target_ip', help='The IP address of the target device.')
+    parser_bonding.add_argument('--enable', action='store_true', help='Enable bonding.')
+    parser_bonding.add_argument('--disable', action='store_true', help='Disable bonding.')
+    parser_bonding.add_argument('--group-id', type=int, default=0, help='The ID of the bonding group.')
+    parser_bonding.add_argument('--mode', choices=['atm', 'ethernet'], default='ethernet', help='The bonding mode.')
+    parser_bonding.add_argument('--line-ids', type=str, help='Comma-separated list of line IDs to include in the group.')
+    parser_bonding.add_argument('--delay-ms', type=int, default=10, help='Differential delay compensation in milliseconds.')
+    parser_bonding.set_defaults(func=run_bonding_exploit)
 
     args = parser.parse_args()
     args.func(args)
