@@ -510,6 +510,64 @@ class KernelDSLManipulator:
             logging.error(f"Unknown mitigation mode: {mode}. Supported modes are 'snr' and 'power'.")
             return False
 
+    def force_dynamic_reconfiguration(self) -> bool:
+        """
+        Triggers a dynamic reconfiguration event (DRA) on the line.
+
+        This is typically a 'fast retrain' that adjusts parameters without
+        dropping the link entirely.
+
+        Returns:
+            True if the renegotiation was triggered successfully, False otherwise.
+        """
+        logging.info("Forcing dynamic line reconfiguration (DRA)...")
+        try:
+            success = self.hal.force_renegotiation()
+            if success:
+                logging.info("Successfully triggered dynamic reconfiguration.")
+            else:
+                logging.error("HAL failed to trigger dynamic reconfiguration.")
+            return success
+        except NotImplementedError:
+            logging.error(f"Dynamic reconfiguration is not supported by the {self.hal.__class__.__name__} HAL.")
+            return False
+
+    def manipulate_sra(self, enable_bitswap: bool, target_snr_floor_db: float | None = None) -> dict:
+        """
+        Manipulates Seamless Rate Adaptation (SRA) behavior.
+
+        It enables/disables bit-swap and can optionally trigger SNR reduction
+        to encourage a rate change.
+
+        Args:
+            enable_bitswap: Whether to enable or disable the bit-swap feature.
+            target_snr_floor_db: If provided, will dynamically reduce SNR to this
+                                 floor to provoke SRA.
+
+        Returns:
+            A dictionary reporting the success of the operations.
+        """
+        logging.info(f"Manipulating SRA: Bit-swap enabled -> {enable_bitswap}")
+        results = {}
+
+        try:
+            bitswap_success = self.hal.control_bitswap(enable_bitswap)
+            results["bitswap_control_set"] = bitswap_success
+            if not bitswap_success:
+                logging.error("Failed to control bit-swap. Aborting SRA manipulation.")
+                return results
+        except NotImplementedError:
+            logging.error(f"Bit-swap control is not supported by the {self.hal.__class__.__name__} HAL.")
+            results["bitswap_control_set"] = False
+            return results
+
+        if target_snr_floor_db is not None:
+            logging.info(f"Proceeding with SNR reduction to provoke SRA...")
+            sra_results = self.dynamically_reduce_snr(target_snr_floor_db)
+            results.update(sra_results)
+
+        return results
+
     def set_per_tone_bit_loading(self, bit_allocation: dict[int, int]) -> bool:
         """
         Applies a custom bit-loading map to specific tones.
@@ -567,34 +625,20 @@ class KernelDSLManipulator:
             logging.error(f"Tone ordering is not supported by the {self.hal.__class__.__name__} HAL.")
             return False
 
-    def control_tone_activation(self, tones_to_disable: list[int] | None = None, tones_to_enable: list[int] | None = None) -> bool:
+    def control_tone_activation(self, tone_map: dict[int, bool]) -> bool:
         """
-        Activates or deactivates specific DMT tones.
+        Applies a complete activation map for DMT tones.
 
         Args:
-            tones_to_disable: A list of tone indices to turn off.
-            tones_to_enable: A list of tone indices to turn on.
+            tone_map: A dictionary mapping a tone index to a boolean (True=on, False=off).
 
         Returns:
             True if the tone activation map was successfully applied, False otherwise.
         """
-        logging.info(f"Controlling tone activation: Disable {tones_to_disable}, Enable {tones_to_enable}")
-
-        # This is a simplified approach. A real implementation would need to read
-        # the current tone map first. For this example, we assume we start from a
-        # default state where all tones are on.
-
-        # Since we don't know the full set of tones, we create a map just for the changes.
-        tone_map = {}
-        if tones_to_disable:
-            for tone in tones_to_disable:
-                tone_map[tone] = False
-        if tones_to_enable:
-            for tone in tones_to_enable:
-                tone_map[tone] = True
+        logging.info(f"Applying new tone activation map for {len(tone_map)} tones...")
 
         if not tone_map:
-            logging.warning("No tones specified for activation or deactivation.")
+            logging.warning("Empty tone map provided for activation control.")
             return True
 
         try:
@@ -632,8 +676,8 @@ class KernelDSLManipulator:
 
     def optimize_tone_allocation(self, target_distance_m: int, snr_threshold_db: float = 6.0) -> bool:
         """
-        Analyzes the line for a simulated distance, calculates an optimal bit and
-        tone allocation based on the physics model, and applies it.
+        Calculates and applies an optimal bit and tone allocation based on a
+        physics model for a simulated line distance.
 
         Args:
             target_distance_m: The simulated line distance to optimize for.
@@ -646,15 +690,15 @@ class KernelDSLManipulator:
 
         # 1. Calculate the SNR profile and get corresponding tone indices.
         snr_per_tone = self.physics.calculate_snr_per_tone(distance_m=target_distance_m)
-        tone_indices = self.physics.get_tone_indices()
+        all_tones = self.physics.get_tone_indices()
 
-        if len(snr_per_tone) != len(tone_indices):
+        if len(snr_per_tone) != len(all_tones):
             logging.error("Mismatch between SNR profile and tone indices. Aborting optimization.")
             return False
 
-        # 2. Determine bit allocation and which tones to deactivate based on the model.
+        # 2. Determine bit allocation and a complete tone activation map.
         bit_allocation = {}
-        tones_to_deactivate = []
+        tone_activation_map = {tone: True for tone in all_tones} # Start with all tones active
 
         # Calculate bits per tone using the same Shannon-Hartley logic as in the physics model.
         snr_gap_linear = 10 ** (self.physics.SNR_GAP_DB / 10)
@@ -669,32 +713,101 @@ class KernelDSLManipulator:
         final_bits_per_tone = np.floor(bits_per_tone).astype(int)
 
         for i, snr in enumerate(snr_per_tone):
-            tone_index = tone_indices[i]
+            tone_index = all_tones[i]
             if snr < snr_threshold_db:
                 # If SNR is too low, deactivate the tone and assign 0 bits.
-                tones_to_deactivate.append(tone_index)
+                tone_activation_map[tone_index] = False
                 bit_allocation[tone_index] = 0
             else:
                 # Otherwise, assign the calculated number of bits.
                 bit_allocation[tone_index] = final_bits_per_tone[i]
 
-        logging.info(f"Optimization plan: Deactivate {len(tones_to_deactivate)} tones, apply custom bit-loading.")
+        logging.info(f"Optimization plan: Deactivating {len([t for t, a in tone_activation_map.items() if not a])} tones.")
 
         # 3. Apply the new configuration via the HAL.
-        success_activation = True
-        if tones_to_deactivate:
-            success_activation = self.control_tone_activation(tones_to_disable=tones_to_deactivate)
+        success_activation = self.control_tone_activation(tone_activation_map)
 
         if not success_activation:
-            logging.error("Failed to deactivate tones. Aborting further optimization.")
+            logging.error("Failed to apply tone activation map. Aborting further optimization.")
             return False
 
         logging.info("Applying optimized bit-loading table...")
         success_bitload = self.set_per_tone_bit_loading(bit_allocation)
 
         if success_bitload:
-            logging.info("Successfully applied tone allocation optimization.")
+            logging.info("Successfully applied full tone allocation optimization.")
         else:
             logging.error("Failed to apply tone allocation optimization.")
 
         return success_bitload
+
+    def run_persistent_showtime_optimization(
+        self,
+        target_distance_m: int,
+        monitoring_duration_s: int = 600,
+        check_interval_s: int = 30,
+        crc_error_threshold: int = 100
+    ) -> dict:
+        """
+        Runs a loop to maintain an optimized line state over time.
+
+        It periodically checks for line degradation (via CRC errors) and
+        re-applies the full, calculated optimal profile if necessary.
+
+        Args:
+            target_distance_m: The target distance for optimization calculations.
+            monitoring_duration_s: Total time to run the optimization loop.
+            check_interval_s: How often to check line stats.
+            crc_error_threshold: New CRC errors per interval that trigger re-optimization.
+
+        Returns:
+            A dictionary summarizing the results of the persistent optimization.
+        """
+        logging.info(f"Starting persistent showtime optimization for {monitoring_duration_s}s...")
+        start_time = time.time()
+        end_time = start_time + monitoring_duration_s
+        reoptimizations_triggered = 0
+
+        # Apply the initial optimal profile
+        logging.info("Applying initial optimal profile...")
+        initial_success = self.optimize_tone_allocation(target_distance_m)
+        if not initial_success:
+            logging.error("Failed to apply initial optimal profile. Aborting.")
+            return {"success": False, "reoptimizations": 0}
+
+        # Get baseline stats after initial optimization
+        time.sleep(check_interval_s / 2) # Wait a moment for stats to update
+        last_stats = self.hal.get_line_stats()
+        last_crc_errors = last_stats.get('crc_errors', 0) if last_stats else 0
+        logging.info(f"Initial CRC count: {last_crc_errors}. Monitoring for spikes.")
+
+        while time.time() < end_time:
+            time.sleep(check_interval_s)
+
+            current_stats = self.hal.get_line_stats()
+            if not current_stats:
+                logging.warning("Could not retrieve line stats. Skipping check.")
+                continue
+
+            current_crc_errors = current_stats.get('crc_errors', 0)
+            new_errors = current_crc_errors - last_crc_errors
+
+            logging.info(f"Monitoring... New CRC errors in last {check_interval_s}s: {new_errors}")
+
+            if new_errors > crc_error_threshold:
+                logging.warning(f"CRC error threshold exceeded ({new_errors} > {crc_error_threshold}). Re-applying profile.")
+                reoptimizations_triggered += 1
+
+                # Re-apply the full optimization profile
+                self.optimize_tone_allocation(target_distance_m)
+
+                # Reset baseline after re-optimization
+                time.sleep(check_interval_s / 2)
+                last_stats = self.hal.get_line_stats()
+                last_crc_errors = last_stats.get('crc_errors', 0) if last_stats else 0
+                logging.info(f"Re-optimization complete. New CRC count: {last_crc_errors}")
+            else:
+                last_crc_errors = current_crc_errors
+
+        logging.info(f"Persistent optimization finished. Total re-optimizations: {reoptimizations_triggered}.")
+        return {"success": True, "reoptimizations": reoptimizations_triggered}
