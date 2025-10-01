@@ -57,3 +57,17 @@ class DatabaseManager:
             dictionary if the vendor is not found.
         """
         return self.signatures.get(vendor, {})
+
+    def get_exploits_for_vendor(self, vendor: str) -> list | None:
+        """
+        Retrieves the list of available exploits for a specific vendor.
+
+        Args:
+            vendor: The name of the vendor.
+
+        Returns:
+            A list of exploit dictionaries, or None if the vendor is not found
+            or has no exploits defined.
+        """
+        vendor_data = self.get_vendor_signature(vendor)
+        return vendor_data.get("exploits") if vendor_data else None
