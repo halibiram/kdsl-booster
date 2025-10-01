@@ -124,14 +124,28 @@ class VectoringAnalyzer:
             "detailed_findings": detailed_findings
         }
 
-    def analyze_pilot_sequences(self) -> dict | None:
+    def analyze_pilot_sequences(self, threshold_sigma: float = 2.0) -> dict | None:
         """
-        Retrieves and analyzes the vectoring pilot sequences to find anomalies
-        that could indicate crosstalk.
+        Retrieves and analyzes vectoring pilot sequences to identify potential
+        victim lines based on statistical anomalies in crosstalk energy.
+
+        Args:
+            threshold_sigma: The number of standard deviations above the mean
+                             to consider a pilot tone as an anomaly, indicating
+                             significant crosstalk.
+
+        Returns:
+            A dictionary containing the analysis results, including a list of
+            indices for potential victim lines.
         """
         logging.info("Attempting to retrieve and analyze vectoring pilot sequences...")
 
-        # The HAL is accessed via the dsl_interface
+        # This assumes the dsl_interface can provide a HAL instance.
+        # This might need to be refactored depending on final integration.
+        # For now, let's assume a get_hal() method exists.
+        if not hasattr(self.dsl_interface, 'get_hal'):
+             logging.error("DSL interface does not have a get_hal() method.")
+             return None
         hal = self.dsl_interface.get_hal()
         if not hal:
             logging.error("Could not get a valid HAL instance from the DSL interface.")
@@ -145,24 +159,25 @@ class VectoringAnalyzer:
 
         if not pilots:
             logging.info("Pilot sequence data is empty.")
-            return {"pilot_count": 0, "analysis": "No pilots to analyze."}
+            return {"pilot_count": 0, "analysis": "No pilots to analyze.", "victim_lines": []}
 
-        # Basic analysis: calculate average, min, max, and identify outliers
-        avg_power = sum(pilots) / len(pilots)
-        min_power = min(pilots)
-        max_power = max(pilots)
+        pilot_count = len(pilots)
+        avg_power = sum(pilots) / pilot_count
+        std_dev = (sum((p - avg_power) ** 2 for p in pilots) / pilot_count) ** 0.5
 
-        # Simple outlier detection: anything 1.5x greater than the average
-        # This is a basic heuristic for a potential crosstalk source
-        outliers = [p for p in pilots if p > avg_power * 1.5]
+        # Identify anomalies (potential victim lines)
+        # A victim line's pilot tone will receive significant energy (crosstalk)
+        # from an aggressor, pushing its value far from the average.
+        crosstalk_threshold = avg_power + (threshold_sigma * std_dev)
+        victim_line_indices = [i for i, p in enumerate(pilots) if p > crosstalk_threshold]
 
-        logging.info(f"Successfully analyzed {len(pilots)} pilot tones.")
+        logging.info(f"Successfully analyzed {pilot_count} pilot tones.")
 
         return {
-            "pilot_count": len(pilots),
+            "pilot_count": pilot_count,
             "average_power": round(avg_power, 2),
-            "min_power": min_power,
-            "max_power": max_power,
-            "potential_crosstalk_pilots": outliers,
+            "std_dev": round(std_dev, 2),
+            "crosstalk_threshold": round(crosstalk_threshold, 2),
+            "victim_lines": victim_line_indices,
             "source": "HAL Pilot Sequence Analysis"
         }
