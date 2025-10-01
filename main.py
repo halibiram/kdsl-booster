@@ -154,6 +154,12 @@ def main():
     parser_pipeline.add_argument('--pilot-power', type=int, default=None, help='Set the pilot tone power in dBm.')
     parser_pipeline.set_defaults(func=run_pipeline)
 
+    # SRA mode
+    parser_sra = subparsers.add_parser('sra', help='Run the Seamless Rate Adaptation (SRA) controller.')
+    parser_sra.add_argument('target_ip', help='The IP address of the target device.')
+    parser_sra.add_argument('--duration', type=int, default=300, help='The duration in seconds to run the SRA controller.')
+    parser_sra.set_defaults(func=run_sra_controller)
+
     # Vectoring Exploit mode
     parser_vectoring = subparsers.add_parser('vectoring', help='Run the G.vector precoding matrix exploit.')
     parser_vectoring.add_argument('target_ip', help='The IP address of the target device (used for context).')
@@ -323,6 +329,43 @@ def run_diagnostics(args):
                 print(f"❌ Failed to save results to {args.output}: {e}")
 
     print("\n🎉 Diagnostics run finished. 🎉")
+
+def run_sra_controller(args):
+    """Runs the SRA controller."""
+    print("🚀 Initializing Seamless Rate Adaptation (SRA) Controller 🚀")
+
+    # --- Setup ---
+    # For demonstration, we use a mock SSH interface that simulates a Keenetic Giga (Broadcom).
+    ssh_interface = MagicMock(spec=EntwareSSHInterface)
+    def mock_ssh_executor(command, timeout=None):
+        if "cat /proc/device-tree/model" in command:
+            return "Keenetic Giga (KN-1010)", ""
+        if "command -v xdslctl" in command:
+            return "/usr/bin/xdslctl", ""
+        # Mock commands used by the SRA controller
+        if "xdslctl info --show" in command: # For get_snr_margin
+            return "SNR Margin (dB): 12.3", ""
+        if "xdslctl info --stats" in command: # For get_line_stats
+            return "CRC: 10", ""
+        return "", ""
+    ssh_interface.execute_command.side_effect = mock_ssh_executor
+
+    try:
+        manipulator = KernelDSLManipulator(ssh_interface, profile='17a')
+        print(f"✅ KernelDSLManipulator initialized for SRA with {manipulator.hal.__class__.__name__} HAL.")
+    except RuntimeError as e:
+        print(f"❌ Failed to initialize manipulator: {e}")
+        return
+
+    # --- Execution ---
+    # The adapt_to_line_quality method now runs our SRA controller
+    results = manipulator.adapt_to_line_quality(monitoring_duration_s=args.duration)
+
+    print("\n--- SRA Controller Results ---")
+    print(json.dumps(results, indent=2))
+    print("----------------------------")
+    print("\n🎉 SRA controller run finished. 🎉")
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
