@@ -134,3 +134,47 @@ class AdvancedDSLPhysics:
         total_bitrate_bps = np.sum(bits_per_tone) * self.tone_spacing
 
         return round(total_bitrate_bps / 1_000_000, 2) # Convert to Mbps
+
+    def get_safe_power_boost_limit(self, current_attenuation: float, regulatory_limit_dbm: float = 20.0) -> float:
+        """
+        Calculates the maximum safe power boost based on line conditions.
+
+        Args:
+            current_attenuation: The current measured line attenuation.
+            regulatory_limit_dbm: The regulatory power limit in dBm.
+
+        Returns:
+            The maximum safe power boost in dB.
+        """
+        # This is a placeholder for a more complex calculation.
+        # A real implementation would consider frequency-dependent limits.
+        logging.info(f"Calculating safe power boost limit for attenuation {current_attenuation} dB...")
+        if current_attenuation > 40:
+            # High attenuation, allow more boost
+            return 5.0
+        elif current_attenuation > 20:
+            # Medium attenuation, allow moderate boost
+            return 3.0
+        else:
+            # Low attenuation, be conservative
+            return 1.0
+
+    def generate_optimal_psd_shape(self, target_rate_mbps: float, distance_m: int) -> dict:
+        """
+        Generates an optimal per-band PSD configuration.
+
+        Args:
+            target_rate_mbps: The desired data rate.
+            distance_m: The line distance in meters.
+
+        Returns:
+            A dictionary with the optimal per-band PSD configuration.
+        """
+        # This is a placeholder for a complex optimization algorithm.
+        logging.info(f"Generating optimal PSD shape for {target_rate_mbps} Mbps at {distance_m}m...")
+        if distance_m < 500:
+            # Shorter loop, can use higher frequencies
+            return {1: -40, 2: -45, 3: -50} # Example values
+        else:
+            # Longer loop, focus power on lower frequencies
+            return {1: -35, 2: -50, 3: -60} # Example values

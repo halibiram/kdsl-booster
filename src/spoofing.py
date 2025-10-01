@@ -7,6 +7,7 @@ that orchestrate the manipulation of kernel parameters to achieve the desired
 line performance.
 """
 import time
+import time
 import logging
 import numpy as np
 
@@ -296,3 +297,114 @@ class KernelDSLManipulator:
         else:
             logging.error("Failed to apply pilot tone power manipulation.")
         return success
+
+    def apply_psd_mask_override(self, mask_id: int) -> bool:
+        """
+        Applies a specific PSD mask by its ID.
+        Args:
+            mask_id: The ID of the PSD mask to apply.
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying PSD mask override: ID {mask_id}")
+        success = self.hal.set_psd_mask(mask_id)
+        if success:
+            logging.info("Successfully applied PSD mask override.")
+        else:
+            logging.error("Failed to apply PSD mask override.")
+        return success
+
+    def apply_upstream_power_boost(self, boost_db: int) -> bool:
+        """
+        Applies a power boost to the upstream signal.
+        Args:
+            boost_db: The power boost in dB.
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying upstream power boost: {boost_db} dB")
+        success = self.hal.set_upstream_power_boost(boost_db)
+        if success:
+            logging.info("Successfully applied upstream power boost.")
+        else:
+            logging.error("Failed to apply upstream power boost.")
+        return success
+
+    def manipulate_downstream_power_request(self, power_dbm: int) -> bool:
+        """
+        Manipulates the downstream power request sent by the modem.
+        Args:
+            power_dbm: The requested power in dBm.
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Manipulating downstream power request: {power_dbm} dBm")
+        success = self.hal.set_downstream_power_request(power_dbm)
+        if success:
+            logging.info("Successfully manipulated downstream power request.")
+        else:
+            logging.error("Failed to manipulate downstream power request.")
+        return success
+
+    def optimize_per_band_psd(self, band_config: dict) -> bool:
+        """
+        Applies a custom per-band PSD configuration.
+        Args:
+            band_config: A dictionary defining the PSD for each band.
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying per-band PSD optimization: {band_config}")
+        success = self.hal.set_per_band_psd(band_config)
+        if success:
+            logging.info("Successfully applied per-band PSD optimization.")
+        else:
+            logging.error("Failed to apply per-band PSD optimization.")
+        return success
+
+    def start_dynamic_psd_adaptation(self, monitoring_duration_s: int = 300, check_interval_s: int = 10, instability_threshold: int = 50) -> dict:
+        """
+        Monitors line for instability and adaptively adjusts upstream power.
+        This uses CRC errors as a proxy for line instability, which can be caused
+        by factors like crosstalk. A more advanced implementation would use a direct
+        crosstalk metric if available from the hardware.
+
+        Args:
+            monitoring_duration_s: Total time to run the adaptive loop.
+            check_interval_s: How often to check line stats.
+            instability_threshold: Number of new CRC errors per interval that triggers a power reduction.
+        Returns:
+            A dictionary with the final results of the adaptation.
+        """
+        logging.info("Starting dynamic PSD adaptation based on line instability (CRC errors)...")
+        start_time = time.time()
+        end_time = start_time + monitoring_duration_s
+
+        initial_stats = self.hal.get_line_stats()
+        last_crc_errors = initial_stats.get('crc_errors', 0)
+
+        current_boost = 0  # Start with a baseline boost of 0 dB.
+
+        while time.time() < end_time:
+            current_stats = self.hal.get_line_stats()
+            current_crc_errors = current_stats.get('crc_errors', 0)
+            new_errors = current_crc_errors - last_crc_errors
+
+            logging.info(f"Current Upstream Power Boost: {current_boost} dB. New CRC errors: {new_errors}")
+
+            if new_errors > instability_threshold:
+                # High instability detected, reduce our power to stabilize the line.
+                current_boost = max(0, current_boost - 1)  # Decrease boost, not going below 0.
+                logging.warning(f"Instability ({new_errors} errors) exceeded threshold. Reducing power boost to {current_boost} dB.")
+                self.hal.set_upstream_power_boost(current_boost)
+            else:
+                # Line is stable, we can be more aggressive.
+                current_boost += 1
+                logging.info(f"Line is stable. Increasing power boost to {current_boost} dB.")
+                self.hal.set_upstream_power_boost(current_boost)
+
+            last_crc_errors = current_crc_errors
+            time.sleep(check_interval_s)
+
+        logging.info(f"Dynamic PSD adaptation finished. Final power boost: {current_boost} dB.")
+        return {"success": True, "final_upstream_power_boost": current_boost}

@@ -101,6 +101,50 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def set_psd_mask(self, mask_id: int) -> bool:
+        """
+        Sets the Power Spectral Density (PSD) mask.
+        Args:
+            mask_id: The identifier of the PSD mask to apply.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_upstream_power_boost(self, boost_db: int) -> bool:
+        """
+        Applies a power boost to the upstream signal.
+        Args:
+            boost_db: The power boost in dB.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_downstream_power_request(self, power_dbm: int) -> bool:
+        """
+        Manipulates the downstream power request.
+        Args:
+            power_dbm: The requested power in dBm.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_per_band_psd(self, band_config: dict) -> bool:
+        """
+        Sets per-band PSD shaping parameters.
+        Args:
+            band_config: A dictionary with band-specific PSD settings.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
 class BroadcomDslHal(DslHalBase):
     """
     HAL for Broadcom DSL chipsets (e.g., BCM63xx series).
@@ -235,6 +279,59 @@ class BroadcomDslHal(DslHalBase):
             return False
         return True
 
+    def set_psd_mask(self, mask_id: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --psdmask {mask_id}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom PSD mask: {stderr}")
+            return False
+        return True
+
+    def set_upstream_power_boost(self, boost_db: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --uspowerboost {boost_db}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom upstream power boost: {stderr}")
+            return False
+        return True
+
+    def set_downstream_power_request(self, power_dbm: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --dspowerreq {power_dbm}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom downstream power request: {stderr}")
+            return False
+        return True
+
+    def set_per_band_psd(self, band_config: dict) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        config_str = " ".join([f"-band{k} {v}" for k, v in band_config.items()])
+        command = f"{self.driver_path} configure --bandpsd {config_str}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom per-band PSD: {stderr}")
+            return False
+        return True
+
 class LantiqDslHal(DslHalBase):
     """
     HAL for Lantiq (now Intel) DSL chipsets (e.g., VRX208/VRX288).
@@ -349,6 +446,48 @@ class LantiqDslHal(DslHalBase):
     def set_pilot_tone_power(self, power_dbm: int) -> bool:
         logging.error("Pilot tone power manipulation is not supported on Lantiq chipsets.")
         raise NotImplementedError("Lantiq HAL does not support set_pilot_tone_power.")
+
+    def set_psd_mask(self, mask_id: int) -> bool:
+        if not self.driver_path:
+            return False
+        command = f"echo {mask_id} > {self.driver_path}/psd_mask_override"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq PSD mask: {stderr}")
+            return False
+        return True
+
+    def set_upstream_power_boost(self, boost_db: int) -> bool:
+        if not self.driver_path:
+            return False
+        command = f"echo {boost_db} > {self.driver_path}/upstream_power_boost"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq upstream power boost: {stderr}")
+            return False
+        return True
+
+    def set_downstream_power_request(self, power_dbm: int) -> bool:
+        if not self.driver_path:
+            return False
+        command = f"echo {power_dbm} > {self.driver_path}/downstream_power_request"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq downstream power request: {stderr}")
+            return False
+        return True
+
+    def set_per_band_psd(self, band_config: dict) -> bool:
+        if not self.driver_path:
+            return False
+        # This is a simplified representation; a real implementation might need a more complex format.
+        config_str = ";".join([f"{k}:{v}" for k, v in band_config.items()])
+        command = f"echo '{config_str}' > {self.driver_path}/per_band_psd_config"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq per-band PSD: {stderr}")
+            return False
+        return True
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {

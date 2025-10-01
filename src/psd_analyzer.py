@@ -118,3 +118,27 @@ class PSDAnalyzer:
             "psd_mask_class": psd_mask_class,
             "detailed_findings": detailed_findings
         }
+
+    def recommend_psd_mask(self, profile: str = '17a') -> int | None:
+        """
+        Recommends a PSD mask ID based on the desired VDSL2 profile.
+
+        Args:
+            profile: The VDSL2 profile ('17a', '35b', etc.).
+
+        Returns:
+            The recommended PSD mask ID, or None if no recommendation is available.
+        """
+        logging.info(f"Generating PSD mask recommendation for profile: {profile}")
+        if '35b' in profile:
+            # Profile 35b typically requires more flexible or specific masks.
+            # Returning a common Annex M or B mask as a placeholder.
+            logging.info("Recommending ETSI Annex B for 35b profile for broader frequency support.")
+            return 2 # ETSI Annex B
+        elif '17a' in profile:
+            # Profile 17a is very common and works well with the standard ETSI mask.
+            logging.info("Recommending ETSI Annex A for 17a profile.")
+            return 1 # ETSI Annex A
+        else:
+            logging.warning(f"No specific PSD mask recommendation for profile '{profile}'.")
+            return None
