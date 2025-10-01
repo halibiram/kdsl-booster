@@ -52,6 +52,55 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def set_attenuation(self, downstream_attenuation: int, upstream_attenuation: int) -> bool:
+        """
+        Sets the downstream and upstream attenuation values.
+
+        Args:
+            downstream_attenuation: The target downstream attenuation in 0.1 dB.
+            upstream_attenuation: The target upstream attenuation in 0.1 dB.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_loop_length(self, loop_length_m: int) -> bool:
+        """
+        Sets the virtual loop length.
+
+        Args:
+            loop_length_m: The target loop length in meters.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_signal_boost(self, boost_db: int) -> bool:
+        """
+        Applies a fake signal boost.
+
+        Args:
+            boost_db: The signal boost to apply in dB.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_pilot_tone_power(self, power_dbm: int) -> bool:
+        """
+        Manipulates the pilot tone power.
+
+        Args:
+            power_dbm: The target pilot tone power in dBm.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
 class BroadcomDslHal(DslHalBase):
     """
     HAL for Broadcom DSL chipsets (e.g., BCM63xx series).
@@ -132,6 +181,59 @@ class BroadcomDslHal(DslHalBase):
                 except (IndexError, ValueError):
                     continue
         return stats
+
+    def set_attenuation(self, downstream_attenuation: int, upstream_attenuation: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --latn {downstream_attenuation} --uslatn {upstream_attenuation}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom attenuation: {stderr}")
+            return False
+        return True
+
+    def set_loop_length(self, loop_length_m: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --looplen {loop_length_m}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom loop length: {stderr}")
+            return False
+        return True
+
+    def set_signal_boost(self, boost_db: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        # Assuming boost is an integer representing dB
+        command = f"{self.driver_path} configure --sigboost {boost_db}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom signal boost: {stderr}")
+            return False
+        return True
+
+    def set_pilot_tone_power(self, power_dbm: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        command = f"{self.driver_path} configure --pilottone {power_dbm}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom pilot tone power: {stderr}")
+            return False
+        return True
 
 class LantiqDslHal(DslHalBase):
     """
@@ -214,6 +316,39 @@ class LantiqDslHal(DslHalBase):
                     stats[key] = val_stdout.strip()
 
         return stats
+
+    def set_attenuation(self, downstream_attenuation: int, upstream_attenuation: int) -> bool:
+        if not self.driver_path:
+            return False
+        # Lantiq drivers often have separate files for downstream and upstream
+        cmd_down = f"echo {downstream_attenuation} > {self.driver_path}/loop_attenuation_downstream"
+        cmd_up = f"echo {upstream_attenuation} > {self.driver_path}/loop_attenuation_upstream"
+
+        _, stderr_down = self.ssh.execute_command(cmd_down)
+        _, stderr_up = self.ssh.execute_command(cmd_up)
+
+        if stderr_down or stderr_up:
+            logging.error(f"Failed to set Lantiq attenuation: DS({stderr_down}), US({stderr_up})")
+            return False
+        return True
+
+    def set_loop_length(self, loop_length_m: int) -> bool:
+        if not self.driver_path:
+            return False
+        command = f"echo {loop_length_m} > {self.driver_path}/loop_length_override"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq loop length: {stderr}")
+            return False
+        return True
+
+    def set_signal_boost(self, boost_db: int) -> bool:
+        logging.error("Signal boost manipulation is not supported on Lantiq chipsets.")
+        raise NotImplementedError("Lantiq HAL does not support set_signal_boost.")
+
+    def set_pilot_tone_power(self, power_dbm: int) -> bool:
+        logging.error("Pilot tone power manipulation is not supported on Lantiq chipsets.")
+        raise NotImplementedError("Lantiq HAL does not support set_pilot_tone_power.")
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {
