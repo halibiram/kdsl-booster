@@ -133,7 +133,27 @@
         "dns": { "vendor_patterns": ["calix"], "model_patterns": ["e7"] },
         "ghs": { "signatures": [ { "description": "E7 Series", "vendor_id": "CALX", "cl_payload_pattern": "020100632101", "vsi_patterns": ["E7"] } ] }
     },
-    "broadcom": { "ghs": { "signatures": [ { "description": "Generic Broadcom Chipset", "vendor_id": "BDCM", "cl_payload_pattern": "020100FFFF01", "vsi_patterns": ["BCM"] } ] } },
+    "broadcom": {
+        "ghs": {
+            "signatures": [
+                {
+                    "description": "Generic Broadcom Chipset",
+                    "vendor_id": "BDCM",
+                    "cl_payload_pattern": "020100FFFF01",
+                    "vsi_patterns": ["BCM"]
+                }
+            ]
+        },
+        "hal": {
+            "precoding_matrix_path": "/sys/kernel/debug/bcm_dsl/precoding_matrix",
+            "upstream_matrix_path": "/sys/kernel/debug/bcm_dsl/upstream_cancellation_matrix",
+            "pilot_sequence_path": "/sys/kernel/debug/bcm_dsl/pilot_tones",
+            "registers": {
+                "vector_control": "0x1C10",
+                "snr_control": "0x1C14"
+            }
+        }
+    },
     "lantiq": { "ghs": { "signatures": [ { "description": "Generic Lantiq/Intel Chipset", "vendor_id": "LNTQ", "cl_payload_pattern": "020100FFFF02", "vsi_patterns": ["VRX"] } ] } },
     "placeholder_vendor_1": { "ghs": {"signatures": [{ "description": "Placeholder 1", "vendor_id": "PLH1", "cl_payload_pattern": "020100FFFF03", "vsi_patterns": [] }] }},
     "placeholder_vendor_2": { "ghs": {"signatures": [{ "description": "Placeholder 2", "vendor_id": "PLH2", "cl_payload_pattern": "020100FFFF04", "vsi_patterns": [] }] }},

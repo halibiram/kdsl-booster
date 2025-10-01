@@ -116,8 +116,10 @@ def test_vectoring_analyzer_ghs_no_support(mock_ghs_analyzer, mock_ssh_interface
 def test_vectoring_analyzer_snmp_active(mock_ghs_analyzer, mock_ssh_interface, mock_signatures):
     """Tests vectoring detection from SNMP when active."""
     active_code = mock_signatures["huawei"]["snmp"]["vectoring_status"]["status_mapping"]["active"]
-    mock_ssh_interface.execute_command.return_value = (f"INTEGER: {active_code}", "")
-    analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_ssh_interface, mock_signatures)
+    # The analyzer expects a dsl_interface object with an ssh attribute.
+    mock_dsl_interface = MagicMock()
+    mock_dsl_interface.ssh.execute_command.return_value = (f"INTEGER: {active_code}", "")
+    analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_dsl_interface, mock_signatures)
     result = analyzer.detect_vectoring_from_snmp(vendor="huawei")
     assert result is not None
     assert result["is_active"] is True
@@ -125,8 +127,10 @@ def test_vectoring_analyzer_snmp_active(mock_ghs_analyzer, mock_ssh_interface, m
 def test_vectoring_analyzer_snmp_inactive(mock_ghs_analyzer, mock_ssh_interface, mock_signatures):
     """Tests vectoring detection from SNMP when inactive."""
     inactive_code = mock_signatures["huawei"]["snmp"]["vectoring_status"]["status_mapping"]["inactive"]
-    mock_ssh_interface.execute_command.return_value = (f"INTEGER: {inactive_code}", "")
-    analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_ssh_interface, mock_signatures)
+    # The analyzer expects a dsl_interface object with an ssh attribute.
+    mock_dsl_interface = MagicMock()
+    mock_dsl_interface.ssh.execute_command.return_value = (f"INTEGER: {inactive_code}", "")
+    analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_dsl_interface, mock_signatures)
     result = analyzer.detect_vectoring_from_snmp(vendor="huawei")
     assert result is not None
     assert result["is_active"] is False
