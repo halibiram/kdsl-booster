@@ -31,16 +31,17 @@ class UniversalDSLAMDetector:
     # A final score must be above this threshold to be considered a valid result.
     FINAL_CONFIDENCE_THRESHOLD = 10
 
-    def __init__(self, ssh_interface, signature_file='src/vendor_signatures.json'):
+    def __init__(self, ssh_interface, db_manager):
         """
-        Initializes the detector with an SSH interface for running commands.
+        Initializes the detector with an SSH interface and a database manager.
         """
         self.ssh = ssh_interface
+        self.db_manager = db_manager
+        self.signatures = self.db_manager.get_all_signatures()
         self.ghs_analyzer = GHSHandshakeAnalyzer(ssh_interface)
         self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
         self.dns_analyzer = DNSAnalyzer()
         self.tr069_analyzer = TR069Analyzer(ssh_interface)
-        self.signatures = self._load_signatures(signature_file)
         self.detection_methods = {
             'g_hs': self._detect_via_g_hs,
             'snmp': self._detect_via_snmp,
@@ -49,15 +50,6 @@ class UniversalDSLAMDetector:
             'tr069': self._detect_via_tr069,
             'timing': self._detect_via_timing,
         }
-
-    def _load_signatures(self, signature_file: str) -> dict:
-        """Loads vendor signatures from a JSON file."""
-        try:
-            with open(signature_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to load signatures from {signature_file}: {e}")
-            return {}
 
     def identify_vendor(self, methods: list = ['g_hs', 'snmp', 'dhcp', 'dns', 'tr069', 'timing']) -> dict | None:
         """

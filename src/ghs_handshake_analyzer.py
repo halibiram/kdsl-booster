@@ -93,6 +93,12 @@ class GHSHandshakeAnalyzer:
                 "cl_message_payload": cl_message.get("payload"),
                 "vendor_id": cl_message.get("vendor_id"),
                 "vsi": cl_message.get("vsi"),
+                "vdsl2_profiles_bitmap": cl_message.get("vdsl2_profiles_bitmap"),
+                "g_vector_bitmap": cl_message.get("g_vector_bitmap"),
+                "bonding_bitmap": cl_message.get("bonding_bitmap"),
+                "band_plan_id": cl_message.get("band_plan_id"),
+                "g_inp_bitmap": cl_message.get("g_inp_bitmap"),
+                "psd_mask_id": cl_message.get("psd_mask_id"),
                 "full_analysis": cl_message
             })
         else:
@@ -110,34 +116,64 @@ class GHSHandshakeAnalyzer:
         msg_type = msg_type_map.get(payload[0])
         if not msg_type: return None
 
-        parsed_data = {"type": msg_type, "payload": payload, "vendor_id": None, "vsi": None}
+        parsed_data = {
+            "type": msg_type, "payload": payload, "vendor_id": None, "vsi": None,
+            "vdsl2_profiles_bitmap": None, "g_vector_bitmap": None, "bonding_bitmap": None,
+            "band_plan_id": None, "g_inp_bitmap": None, "psd_mask_id": None
+        }
         try:
-            # Start search for NSIF marker (0x91) after the first byte.
-            i = 1
+            i = 1  # Start after message type
+            bonding_bitmap = 0
             while i < len(payload):
-                if payload[i] == 0x91:
-                    # Found the NSIF marker. Check for length byte.
-                    if i + 1 < len(payload):
-                        param_len = payload[i + 1]
-                        nsif_data_start = i + 2
-                        # Check if the full parameter is within the payload bounds.
-                        if nsif_data_start + param_len <= len(payload):
-                            nsif_data = payload[nsif_data_start : nsif_data_start + param_len]
-                            # NSIF must have at least 6 bytes for country code + vendor ID.
-                            if len(nsif_data) >= 6:
-                                parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
-                                parsed_data["vsi"] = nsif_data[6:]
-                            # Break after finding the first valid NSIF.
-                            break
-                        else:
-                            # Malformed length, stop parsing.
-                            break
-                    else:
-                        # Marker found at the very end, malformed.
-                        break
-                i += 1 # Move to the next byte to search for the marker.
+                # A simplified but more robust TLV parser for SIF.
+                # Every parameter should have an ID (Type) and a Length.
+                if i + 1 >= len(payload):
+                    break # Not enough bytes for a full TLV
+
+                param_id = payload[i]
+                param_len = payload[i+1]
+
+                # Ensure the full parameter is within the payload bounds
+                if i + 2 + param_len > len(payload):
+                    break # Malformed parameter, stop parsing
+
+                data_start_index = i + 2
+
+                # VDSL2 Profiles (ID 0x83)
+                if param_id == 0x83 and param_len >= 2:
+                    bitmap_val = int.from_bytes(payload[data_start_index:data_start_index + 2], 'big')
+                    parsed_data["vdsl2_profiles_bitmap"] = bitmap_val
+                # VDSL2 Band Plan (ID 0x84)
+                elif param_id == 0x84 and param_len >= 1:
+                    parsed_data["band_plan_id"] = payload[data_start_index]
+                # VDSL2 PSD Mask (ID 0x85)
+                elif param_id == 0x85 and param_len >= 1:
+                    parsed_data["psd_mask_id"] = payload[data_start_index]
+                # G.vector/G.993.5 Support (ID 0x86)
+                elif param_id == 0x86 and param_len >= 1:
+                    parsed_data["g_vector_bitmap"] = payload[data_start_index]
+                # G.998.1 ATM-based Bonding (ID 0xA0)
+                elif param_id == 0xA0:
+                    bonding_bitmap |= (1 << 0)
+                # G.998.2 Ethernet-based Bonding (ID 0xA1)
+                elif param_id == 0xA1:
+                    bonding_bitmap |= (1 << 1)
+                # G.998.4 G.inp/Retransmission (ID 0xB0)
+                elif param_id == 0xB0 and param_len >= 1:
+                    parsed_data["g_inp_bitmap"] = payload[data_start_index]
+                # --- NSIF Parameter Parsing ---
+                elif param_id == 0x91 and param_len >= 6:
+                    nsif_data = payload[data_start_index : data_start_index + param_len]
+                    parsed_data["vendor_id"] = nsif_data[2:6].decode('ascii', errors='ignore')
+                    parsed_data["vsi"] = nsif_data[6:]
+
+                # Move to the next parameter using the length byte
+                i += 2 + param_len
+
+            if bonding_bitmap > 0:
+                parsed_data["bonding_bitmap"] = bonding_bitmap
+
         except Exception as e:
-            # Catch any other unexpected parsing errors.
             logging.warning(f"Unexpected error while parsing G.hs message: {e}")
 
         return parsed_data
