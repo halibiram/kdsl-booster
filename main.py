@@ -13,13 +13,14 @@ from src.tr069.fuzzer import CwmpFuzzer
 
 def run_pipeline(args):
     """Runs the main exploitation pipeline."""
-    print("🚀 Initializing DSL Bypass Ultra v1.1 - Pipeline Mode 🚀")
+    print(f"🚀 Initializing DSL Bypass Ultra v1.1 - Pipeline Mode (Strategy: {args.strategy}) 🚀")
     try:
         pipeline = ExploitPipeline(
             target_ip=args.target_ip,
             community_string='public',
             signature_file='src/vendor_signatures.json',
-            target_rate_mbps=125.0
+            target_rate_mbps=125.0,
+            manipulation_strategy=args.strategy
         )
         mock_ssh_interface = MagicMock()
         pipeline.ssh_interface = mock_ssh_interface
@@ -78,6 +79,12 @@ def main():
     # Pipeline mode
     parser_pipeline = subparsers.add_parser('pipeline', help='Run the full DSL exploitation pipeline.')
     parser_pipeline.add_argument('target_ip', help='The IP address of the target device.')
+    parser_pipeline.add_argument(
+        '--strategy',
+        choices=['static', 'dynamic_reduce', 'adaptive'],
+        default='static',
+        help='The SNR manipulation strategy to use.'
+    )
     parser_pipeline.set_defaults(func=run_pipeline)
 
     # ACS Spoofer mode

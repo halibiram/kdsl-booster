@@ -43,6 +43,15 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_line_stats(self) -> dict:
+        """
+        Retrieves key line statistics from the modem.
+        Returns:
+            A dictionary with stats like 'crc_errors', 'uptime', 'link_state'.
+        """
+        pass
+
 class BroadcomDslHal(DslHalBase):
     """
     HAL for Broadcom DSL chipsets (e.g., BCM63xx series).
@@ -100,6 +109,30 @@ class BroadcomDslHal(DslHalBase):
             return False
         return True
 
+    def get_line_stats(self) -> dict:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return {}
+
+        command = f"{self.driver_path} info --stats"
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if stderr or not stdout:
+            logging.error(f"Failed to get Broadcom DSL stats: {stderr}")
+            return {}
+
+        stats = {}
+        for line in stdout.splitlines():
+            if "CRC" in line or "error" in line:
+                try:
+                    parts = line.split(':')
+                    key = parts[0].strip().lower().replace(" ", "_")
+                    value = int(parts[1].strip())
+                    stats[key] = value
+                except (IndexError, ValueError):
+                    continue
+        return stats
+
 class LantiqDslHal(DslHalBase):
     """
     HAL for Lantiq (now Intel) DSL chipsets (e.g., VRX208/VRX288).
@@ -148,6 +181,39 @@ class LantiqDslHal(DslHalBase):
             logging.error(f"Failed to set Lantiq SNR margin: {stderr}")
             return False
         return True
+
+    def get_line_stats(self) -> dict:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return {}
+
+        stats_path = f"{self.driver_path}/stats"
+        stats = {}
+
+        # List all stat files and read them
+        command = f"find {stats_path} -type f -name '*'"
+        files_stdout, _ = self.ssh.execute_command(command)
+
+        if not files_stdout:
+            logging.warning(f"No stat files found in {stats_path}")
+            return {}
+
+        for file_path in files_stdout.strip().split('\n'):
+            if not file_path:
+                continue
+
+            key = file_path.split('/')[-1].lower()
+
+            read_command = f"cat {file_path}"
+            val_stdout, _ = self.ssh.execute_command(read_command)
+
+            if val_stdout:
+                try:
+                    stats[key] = int(val_stdout.strip())
+                except ValueError:
+                    stats[key] = val_stdout.strip()
+
+        return stats
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {
