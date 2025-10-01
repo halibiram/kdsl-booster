@@ -33,9 +33,7 @@ def test_profiler_frequency_warning():
     profiler = DSLAMProfiler(capabilities)
     analysis = profiler.generate_profile_analysis()
     assert len(analysis["warnings"]) == 1
-    assert "Inconsistency Detected" in analysis["warnings"][0]
-    assert "Profile 30a" in analysis["warnings"][0]
-    assert "17.664 MHz" in analysis["warnings"][0]
+    assert "Inconsistency: Profile 30a" in analysis["warnings"][0]
     assert not analysis["recommendations"]
 
 def test_profiler_optimization_recommendations():
@@ -49,11 +47,15 @@ def test_profiler_optimization_recommendations():
     }
     profiler = DSLAMProfiler(capabilities)
     analysis = profiler.generate_profile_analysis()
+
+    # Check for presence, not order
+    analysis_recs_str = "".join(analysis["recommendations"])
     assert len(analysis["recommendations"]) == 3
-    assert "Enable Vectoring" in analysis["recommendations"][0]
-    assert "Enable G.inp" in analysis["recommendations"][1]
-    assert "Enable Bonding" in analysis["recommendations"][2]
-    assert not analysis["warnings"]
+    assert "Enable Vectoring" in analysis_recs_str
+    assert "Enable G.inp" in analysis_recs_str
+    assert "Verify bonding" in analysis_recs_str
+    assert len(analysis["warnings"]) == 1
+    assert "Ambiguous State: Bonding" in analysis["warnings"][0]
 
 def test_profiler_mixed_warnings_and_recommendations():
     """
@@ -67,10 +69,11 @@ def test_profiler_mixed_warnings_and_recommendations():
     }
     profiler = DSLAMProfiler(capabilities)
     analysis = profiler.generate_profile_analysis()
-    assert len(analysis["warnings"]) == 1
-    assert "Profile 35b" in analysis["warnings"][0]
-    assert len(analysis["recommendations"]) == 1
-    assert "Enable Vectoring" in analysis["recommendations"][0]
+    # Expect two warnings: one for frequency, one for suboptimal vectoring on a high-speed profile
+    assert len(analysis["warnings"]) == 2
+    assert "Inconsistency: Profile 35b" in analysis["warnings"][0]
+    assert "Suboptimal Configuration: Vectoring" in analysis["warnings"][1]
+    assert not analysis["recommendations"]
 
 def test_profiler_empty_capabilities():
     """

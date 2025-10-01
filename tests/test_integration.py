@@ -107,6 +107,6 @@ def test_full_end_to_end_workflow(signatures, mocker):
     assert "Supported Profiles: 12a, 17a, 30a, 8a" in final_report
     assert "Hardware Support: Yes" in final_report
     assert "Currently Active: No" in final_report # Vectoring is inactive
-    assert "Enable Vectoring" in final_report # Check for recommendation
-    assert "Inconsistency Detected" in final_report # The 30a warning SHOULD trigger from G.hs data
+    assert "Suboptimal Configuration: Vectoring" in final_report # Check for the correct warning
+    assert "Inconsistency: Profile 30a" in final_report # The 30a warning SHOULD trigger from G.hs data
     assert "PSD Mask Class: ETSI Annex A (ADLU-32)" in final_report

@@ -48,10 +48,14 @@ def mock_snmp_executor(command: str) -> tuple[str, str]:
     if SYS_OBJECT_ID_OID in command:
         return HUAWEI_SNMP_SIGS.get('sysObjectID'), ""
 
+    # --- Create a conflict for the profiler to detect ---
+    # G.hs says bonding is supported, but the SNMP query will fail.
+    if HUAWEI_SNMP_SIGS.get('bonding_status', {}).get('oid') in command:
+        return "", "Timeout" # Simulate failure
+
     # Capability Checks
     if HUAWEI_SNMP_SIGS.get('vdsl_profiles_oid') in command: return HUAWEI_VDSL_PROFILES_RESPONSE, ""
     if HUAWEI_SNMP_SIGS.get('vectoring_status', {}).get('oid') in command: return HUAWEI_VECTORING_STATUS_RESPONSE, ""
-    if HUAWEI_SNMP_SIGS.get('bonding_status', {}).get('oid') in command: return HUAWEI_BONDING_STATUS_RESPONSE, ""
     if HUAWEI_SNMP_SIGS.get('max_frequency_oid') in command: return HUAWEI_MAX_FREQUENCY_RESPONSE, ""
     if HUAWEI_SNMP_SIGS.get('retransmission_status', {}).get('oid') in command: return HUAWEI_RETRANSMISSION_STATUS_RESPONSE, ""
     if HUAWEI_SNMP_SIGS.get('psd_mask_oid') in command: return HUAWEI_PSD_MASK_RESPONSE, ""

@@ -73,14 +73,15 @@ class ReportGenerator:
         lines = []
         warnings = data.get('warnings', [])
         recommendations = data.get('recommendations', [])
-        if warnings:
-            lines.append("Warnings:")
-            for warning in warnings:
-                lines.append(f"  - {warning}")
-        if recommendations:
-            lines.append("Recommendations:")
-            for rec in recommendations:
-                lines.append(f"  - {rec}")
+
+        if not warnings and not recommendations:
+            return ["No issues or recommendations."]
+
+        for warning in warnings:
+            lines.append(f"[WARNING] {warning}")
+        for rec in recommendations:
+            lines.append(f"[RECOMMENDATION] {rec}")
+
         return lines
 
     def generate_text_report(self) -> str:
