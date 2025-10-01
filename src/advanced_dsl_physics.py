@@ -24,8 +24,6 @@ VDSL2_PROFILES = {
 
 # Physical constants
 FLAT_NOISE_FLOOR_DBM_HZ = -140.0  # Background thermal noise
-SNR_GAP_DB = 12.8  # Represents implementation losses + target BER margin (more realistic than 9.8)
-MAX_BITS_PER_TONE = 15  # VDSL2 standard cap
 TEMP_ATTENUATION_COEFFICIENT_DB_PER_C = 0.002 # Attenuation increase in dB per degree Celsius per meter
 
 class AdvancedDSLPhysics:
@@ -33,6 +31,9 @@ class AdvancedDSLPhysics:
     Provides a more accurate physics-based model for VDSL2 parameter calculation,
     incorporating per-tone calculations and environmental factors.
     """
+    SNR_GAP_DB = 12.8  # Represents implementation losses + target BER margin (more realistic than 9.8)
+    MAX_BITS_PER_TONE = 15  # VDSL2 standard cap
+
     def __init__(self, profile='17a'):
         if profile not in VDSL2_PROFILES:
             raise ValueError(f"Profile '{profile}' not supported. Available: {list(VDSL2_PROFILES.keys())}")
@@ -51,6 +52,16 @@ class AdvancedDSLPhysics:
             for i in range(start_tone_index, end_tone_index + 1):
                 active_tones.append(i * self.tone_spacing)
         return np.array(active_tones)
+
+    def get_tone_indices(self) -> np.ndarray:
+        """Generates an array of indices for each active tone in the profile."""
+        active_tone_indices = []
+        for start_freq, end_freq in self.profile_data['frequency_bands']:
+            start_tone_index = int(start_freq / self.tone_spacing)
+            end_tone_index = int(end_freq / self.tone_spacing)
+            for i in range(start_tone_index, end_tone_index + 1):
+                active_tone_indices.append(i)
+        return np.array(active_tone_indices)
 
     def model_attenuation_per_tone(self, distance_m: int, temperature_c: float = 20.0) -> np.ndarray:
         """
@@ -118,7 +129,7 @@ class AdvancedDSLPhysics:
         snr_per_tone_db = self.calculate_snr_per_tone(distance_m, temperature_c)
 
         # Convert SNR from dB to a linear ratio and adjust for the SNR gap
-        snr_gap_linear = 10 ** (SNR_GAP_DB / 10)
+        snr_gap_linear = 10 ** (self.SNR_GAP_DB / 10)
         effective_snr_linear = (10 ** (snr_per_tone_db / 10)) / snr_gap_linear
 
         # Calculate bits per tone (log base 2)
@@ -128,7 +139,7 @@ class AdvancedDSLPhysics:
         bits_per_tone[positive_snr_mask] = np.log2(1 + effective_snr_linear[positive_snr_mask])
 
         # Apply the maximum bits per tone cap
-        bits_per_tone = np.clip(bits_per_tone, 0, MAX_BITS_PER_TONE)
+        bits_per_tone = np.clip(bits_per_tone, 0, self.MAX_BITS_PER_TONE)
 
         # Total bitrate is the sum of bits per tone times the tone spacing (symbol rate)
         total_bitrate_bps = np.sum(bits_per_tone) * self.tone_spacing

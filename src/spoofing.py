@@ -509,3 +509,192 @@ class KernelDSLManipulator:
         else:
             logging.error(f"Unknown mitigation mode: {mode}. Supported modes are 'snr' and 'power'.")
             return False
+
+    def set_per_tone_bit_loading(self, bit_allocation: dict[int, int]) -> bool:
+        """
+        Applies a custom bit-loading map to specific tones.
+
+        Args:
+            bit_allocation: A dictionary where keys are tone indices and values are
+                            the number of bits to load (0-15).
+
+        Returns:
+            True if the bit-loading table was successfully applied, False otherwise.
+        """
+        logging.info(f"Applying custom bit-loading for {len(bit_allocation)} tones...")
+        if not all(0 <= bits <= 15 for bits in bit_allocation.values()):
+            logging.error("Invalid bit allocation: bits per tone must be between 0 and 15.")
+            return False
+
+        try:
+            success = self.hal.set_bitloading_table(bit_allocation)
+            if success:
+                logging.info("Successfully applied custom bit-loading table.")
+            else:
+                logging.error("HAL failed to apply the bit-loading table.")
+            return success
+        except NotImplementedError:
+            logging.error(f"Bit-loading manipulation is not supported by the {self.hal.__class__.__name__} HAL.")
+            return False
+
+    def manipulate_tone_ordering(self, tone_order: list[int]) -> bool:
+        """
+        Manipulates the tone ordering to force the use of specific tones first.
+        Note: This is a highly advanced and often unsupported feature. The implementation
+        here assumes a hypothetical HAL method.
+
+        Args:
+            tone_order: A list of tone indices in the desired order of usage.
+
+        Returns:
+            True if the tone reordering was successful, False otherwise.
+        """
+        logging.info(f"Applying custom tone ordering, starting with tone {tone_order[0]}...")
+        try:
+            # This assumes a hypothetical HAL function `set_tone_order`
+            # which is not standard. We are adding it for feature completeness.
+            if hasattr(self.hal, 'set_tone_order'):
+                success = self.hal.set_tone_order(tone_order)
+                if success:
+                    logging.info("Successfully applied custom tone ordering.")
+                else:
+                    logging.error("HAL failed to apply the custom tone order.")
+                return success
+            else:
+                logging.error(f"Tone ordering is not supported by the {self.hal.__class__.__name__} HAL.")
+                return False
+        except NotImplementedError:
+            logging.error(f"Tone ordering is not supported by the {self.hal.__class__.__name__} HAL.")
+            return False
+
+    def control_tone_activation(self, tones_to_disable: list[int] | None = None, tones_to_enable: list[int] | None = None) -> bool:
+        """
+        Activates or deactivates specific DMT tones.
+
+        Args:
+            tones_to_disable: A list of tone indices to turn off.
+            tones_to_enable: A list of tone indices to turn on.
+
+        Returns:
+            True if the tone activation map was successfully applied, False otherwise.
+        """
+        logging.info(f"Controlling tone activation: Disable {tones_to_disable}, Enable {tones_to_enable}")
+
+        # This is a simplified approach. A real implementation would need to read
+        # the current tone map first. For this example, we assume we start from a
+        # default state where all tones are on.
+
+        # Since we don't know the full set of tones, we create a map just for the changes.
+        tone_map = {}
+        if tones_to_disable:
+            for tone in tones_to_disable:
+                tone_map[tone] = False
+        if tones_to_enable:
+            for tone in tones_to_enable:
+                tone_map[tone] = True
+
+        if not tone_map:
+            logging.warning("No tones specified for activation or deactivation.")
+            return True
+
+        try:
+            success = self.hal.set_tone_activation(tone_map)
+            if success:
+                logging.info("Successfully applied tone activation changes.")
+            else:
+                logging.error("HAL failed to apply tone activation changes.")
+            return success
+        except NotImplementedError:
+            logging.error(f"Tone activation is not supported by the {self.hal.__class__.__name__} HAL.")
+            return False
+
+    def manipulate_subcarrier_spacing(self, spacing_khz: float) -> bool:
+        """
+        Manipulates the sub-carrier spacing.
+
+        Args:
+            spacing_khz: The desired sub-carrier spacing in kHz (e.g., 4.3125 or 8.625).
+
+        Returns:
+            True if the spacing was successfully set, False otherwise.
+        """
+        logging.info(f"Setting sub-carrier spacing to {spacing_khz} kHz...")
+        try:
+            success = self.hal.set_subcarrier_spacing(spacing_khz)
+            if success:
+                logging.info(f"Successfully set sub-carrier spacing to {spacing_khz} kHz.")
+            else:
+                logging.error("HAL failed to set the sub-carrier spacing.")
+            return success
+        except NotImplementedError:
+            logging.error(f"Sub-carrier spacing manipulation is not supported by the {self.hal.__class__.__name__} HAL.")
+            return False
+
+    def optimize_tone_allocation(self, target_distance_m: int, snr_threshold_db: float = 6.0) -> bool:
+        """
+        Analyzes the line for a simulated distance, calculates an optimal bit and
+        tone allocation based on the physics model, and applies it.
+
+        Args:
+            target_distance_m: The simulated line distance to optimize for.
+            snr_threshold_db: The minimum SNR for a tone to be considered usable.
+
+        Returns:
+            True if the optimization was successfully applied, False otherwise.
+        """
+        logging.info(f"Optimizing tone allocation for a simulated distance of {target_distance_m}m...")
+
+        # 1. Calculate the SNR profile and get corresponding tone indices.
+        snr_per_tone = self.physics.calculate_snr_per_tone(distance_m=target_distance_m)
+        tone_indices = self.physics.get_tone_indices()
+
+        if len(snr_per_tone) != len(tone_indices):
+            logging.error("Mismatch between SNR profile and tone indices. Aborting optimization.")
+            return False
+
+        # 2. Determine bit allocation and which tones to deactivate based on the model.
+        bit_allocation = {}
+        tones_to_deactivate = []
+
+        # Calculate bits per tone using the same Shannon-Hartley logic as in the physics model.
+        snr_gap_linear = 10 ** (self.physics.SNR_GAP_DB / 10)
+        effective_snr_linear = (10 ** (snr_per_tone / 10)) / snr_gap_linear
+
+        bits_per_tone = np.zeros_like(effective_snr_linear)
+        positive_snr_mask = effective_snr_linear > 0
+        bits_per_tone[positive_snr_mask] = np.log2(1 + effective_snr_linear[positive_snr_mask])
+
+        # Apply the 15-bit cap and floor to get a realistic integer value.
+        bits_per_tone = np.clip(bits_per_tone, 0, self.physics.MAX_BITS_PER_TONE)
+        final_bits_per_tone = np.floor(bits_per_tone).astype(int)
+
+        for i, snr in enumerate(snr_per_tone):
+            tone_index = tone_indices[i]
+            if snr < snr_threshold_db:
+                # If SNR is too low, deactivate the tone and assign 0 bits.
+                tones_to_deactivate.append(tone_index)
+                bit_allocation[tone_index] = 0
+            else:
+                # Otherwise, assign the calculated number of bits.
+                bit_allocation[tone_index] = final_bits_per_tone[i]
+
+        logging.info(f"Optimization plan: Deactivate {len(tones_to_deactivate)} tones, apply custom bit-loading.")
+
+        # 3. Apply the new configuration via the HAL.
+        success_activation = True
+        if tones_to_deactivate:
+            success_activation = self.control_tone_activation(tones_to_disable=tones_to_deactivate)
+
+        if not success_activation:
+            logging.error("Failed to deactivate tones. Aborting further optimization.")
+            return False
+
+        logging.info("Applying optimized bit-loading table...")
+        success_bitload = self.set_per_tone_bit_loading(bit_allocation)
+
+        if success_bitload:
+            logging.info("Successfully applied tone allocation optimization.")
+        else:
+            logging.error("Failed to apply tone allocation optimization.")
+
+        return success_bitload
