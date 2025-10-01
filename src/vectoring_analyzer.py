@@ -13,12 +13,13 @@ class VectoringAnalyzer:
     Analyzes and detects VDSL2 vectoring support and configuration.
     """
 
-    def __init__(self, ghs_analyzer, ssh_interface, signatures):
+    def __init__(self, ghs_analyzer, dsl_interface, signatures):
         """
         Initializes the analyzer with necessary components.
         """
         self.ghs_analyzer = ghs_analyzer
-        self.ssh = ssh_interface
+        self.dsl_interface = dsl_interface
+        self.ssh = dsl_interface.ssh  # For direct SSH commands if needed
         self.signatures = signatures
 
     def detect_vectoring_from_ghs(self) -> dict | None:
@@ -121,4 +122,47 @@ class VectoringAnalyzer:
             "hardware_support": hardware_support,
             "is_active": is_active,
             "detailed_findings": detailed_findings
+        }
+
+    def analyze_pilot_sequences(self) -> dict | None:
+        """
+        Retrieves and analyzes the vectoring pilot sequences to find anomalies
+        that could indicate crosstalk.
+        """
+        logging.info("Attempting to retrieve and analyze vectoring pilot sequences...")
+
+        # The HAL is accessed via the dsl_interface
+        hal = self.dsl_interface.get_hal()
+        if not hal:
+            logging.error("Could not get a valid HAL instance from the DSL interface.")
+            return None
+
+        pilots = hal.get_vectoring_pilot_sequence()
+
+        if pilots is None:
+            logging.warning("Failed to retrieve vectoring pilot sequences from the HAL.")
+            return None
+
+        if not pilots:
+            logging.info("Pilot sequence data is empty.")
+            return {"pilot_count": 0, "analysis": "No pilots to analyze."}
+
+        # Basic analysis: calculate average, min, max, and identify outliers
+        avg_power = sum(pilots) / len(pilots)
+        min_power = min(pilots)
+        max_power = max(pilots)
+
+        # Simple outlier detection: anything 1.5x greater than the average
+        # This is a basic heuristic for a potential crosstalk source
+        outliers = [p for p in pilots if p > avg_power * 1.5]
+
+        logging.info(f"Successfully analyzed {len(pilots)} pilot tones.")
+
+        return {
+            "pilot_count": len(pilots),
+            "average_power": round(avg_power, 2),
+            "min_power": min_power,
+            "max_power": max_power,
+            "potential_crosstalk_pilots": outliers,
+            "source": "HAL Pilot Sequence Analysis"
         }
