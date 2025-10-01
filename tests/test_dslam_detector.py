@@ -43,7 +43,12 @@ def dslam_detector(mock_ssh_interface, signature_file):
          patch.object(UniversalDSLAMDetector, '_detect_via_tr069', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_timing', return_value=[]):
 
-        detector = UniversalDSLAMDetector(mock_ssh_interface, db_manager=mock_db_manager)
+        detector = UniversalDSLAMDetector(
+            target_ip="127.0.0.1",
+            community_string="public",
+            db_manager=mock_db_manager,
+            ssh_interface=mock_ssh_interface
+        )
 
         # Load real signatures for the test's purpose and set them on the instance
         with open(signature_file, 'r') as f:

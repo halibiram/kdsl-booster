@@ -20,7 +20,10 @@ def run_pipeline(args):
             community_string='public',
             signature_file='src/vendor_signatures.json',
             target_rate_mbps=125.0,
-            manipulation_strategy=args.strategy
+            manipulation_strategy=args.strategy,
+            loop_length=args.loop_length,
+            signal_boost=args.signal_boost,
+            pilot_power=args.pilot_power
         )
         mock_ssh_interface = MagicMock()
         pipeline.ssh_interface = mock_ssh_interface
@@ -85,6 +88,9 @@ def main():
         default='static',
         help='The SNR manipulation strategy to use.'
     )
+    parser_pipeline.add_argument('--loop-length', type=int, default=None, help='Spoof the loop length to a specific distance in meters.')
+    parser_pipeline.add_argument('--signal-boost', type=int, default=None, help='Apply a fake signal boost in dB.')
+    parser_pipeline.add_argument('--pilot-power', type=int, default=None, help='Set the pilot tone power in dBm.')
     parser_pipeline.set_defaults(func=run_pipeline)
 
     # ACS Spoofer mode

@@ -135,14 +135,22 @@ class KernelDSLManipulator:
         snr_register_value = int(target_snr * 10)
         print(f"Calculated Targets for {target_distance_m}m -> Avg SNR: {target_snr:.1f} dB, Avg Attenuation: {target_attenuation:.2f} dB")
 
-        # 2. Write SNR margin to the hardware via the HAL
-        success = self.hal.set_snr_margin(snr_register_value)
+        # 2. Write the new physical parameters to the hardware via the HAL.
+        # The HAL methods expect values in specific units (e.g., 0.1 dB).
+        snr_success = self.hal.set_snr_margin(snr_register_value)
+
+        # Convert target attenuation to 0.1 dB for the HAL. Assume same for US/DS for now.
+        attenuation_register_value = int(target_attenuation * 10)
+        attenuation_success = self.hal.set_attenuation(
+            downstream_attenuation=attenuation_register_value,
+            upstream_attenuation=attenuation_register_value
+        )
 
         results = {
-            "snr_margin_set": success,
-            "attenuation_set": "not_supported",
-            "applied_snr_db": target_snr if success else 0,
-            "applied_attenuation_db": target_attenuation,
+            "snr_margin_set": snr_success,
+            "attenuation_set": attenuation_success,
+            "applied_snr_db": target_snr if snr_success else 0,
+            "applied_attenuation_db": target_attenuation if attenuation_success else 0,
         }
 
         print(f"Manipulation results: {results}")
@@ -234,3 +242,57 @@ class KernelDSLManipulator:
         final_snr = self.hal.get_snr_margin()
         logging.info(f"Adaptive SNR adjustment finished. Final SNR: {final_snr:.1f} dB.")
         return {"success": True, "final_snr": final_snr}
+
+    def apply_loop_length_manipulation(self, target_distance_m: int) -> bool:
+        """
+        Attempts to directly manipulate the loop length reported by the modem.
+
+        Args:
+            target_distance_m: The spoofed loop length in meters.
+
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying direct loop length manipulation: {target_distance_m}m")
+        success = self.hal.set_loop_length(target_distance_m)
+        if success:
+            logging.info("Successfully applied loop length manipulation.")
+        else:
+            logging.error("Failed to apply loop length manipulation.")
+        return success
+
+    def apply_fake_signal_boost(self, boost_db: int) -> bool:
+        """
+        Applies a fake signal boost indicator.
+
+        Args:
+            boost_db: The fake signal boost to apply in dB.
+
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying fake signal boost: {boost_db} dB")
+        success = self.hal.set_signal_boost(boost_db)
+        if success:
+            logging.info("Successfully applied fake signal boost.")
+        else:
+            logging.error("Failed to apply fake signal boost.")
+        return success
+
+    def apply_pilot_tone_manipulation(self, power_dbm: int) -> bool:
+        """
+        Manipulates the reported power of pilot tones.
+
+        Args:
+            power_dbm: The target power for pilot tones in dBm.
+
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
+        logging.info(f"Applying pilot tone power manipulation: {power_dbm} dBm")
+        success = self.hal.set_pilot_tone_power(power_dbm)
+        if success:
+            logging.info("Successfully applied pilot tone power manipulation.")
+        else:
+            logging.error("Failed to apply pilot tone power manipulation.")
+        return success
