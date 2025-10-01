@@ -208,6 +208,26 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def force_renegotiation(self) -> bool:
+        """
+        Forces the DSL line to renegotiate parameters (fast retrain).
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def control_bitswap(self, enabled: bool) -> bool:
+        """
+        Enables or disables the bit-swap feature on the line.
+        Args:
+            enabled: True to enable bit-swapping, False to disable.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
 
 class BroadcomDslHal(DslHalBase):
     """
@@ -455,40 +475,71 @@ class BroadcomDslHal(DslHalBase):
         if not self.driver_path:
             logging.error("Broadcom driver command not found.")
             return False
-        # Hypothetical command to apply a custom bit-loading table.
         # The table is provided as a comma-separated list of 'tone:bits' pairs.
         table_str = ",".join([f"{tone}:{bits}" for tone, bits in bit_table.items()])
         command = f"{self.driver_path} configure --bitloading \"{table_str}\""
+        logging.info(f"Applying custom bit-loading table to Broadcom chipset...")
         _, stderr = self.ssh.execute_command(command)
         if stderr:
             logging.error(f"Failed to set Broadcom bit-loading table: {stderr}")
             return False
+        logging.info("Successfully applied bit-loading table.")
         return True
 
     def set_tone_activation(self, tone_map: dict[int, bool]) -> bool:
         if not self.driver_path:
             logging.error("Broadcom driver command not found.")
             return False
-        # Hypothetical command to activate/deactivate tones.
-        # Active tones are listed, inactive tones are omitted.
+        # Active tones are provided as a comma-separated list.
+        # Inactive tones are those not in the list.
         active_tones = ",".join([str(tone) for tone, is_active in tone_map.items() if is_active])
-        command = f"{self.driver_path} configure --tones \"{active_tones}\""
+        command = f"{self.driver_path} configure --activetones \"{active_tones}\""
+        logging.info(f"Setting active tones on Broadcom chipset...")
         _, stderr = self.ssh.execute_command(command)
         if stderr:
             logging.error(f"Failed to set Broadcom tone activation: {stderr}")
             return False
+        logging.info("Successfully applied tone activation map.")
         return True
 
     def set_subcarrier_spacing(self, spacing_khz: float) -> bool:
         if not self.driver_path:
             logging.error("Broadcom driver command not found.")
             return False
-        # Hypothetical command to set sub-carrier spacing.
         command = f"{self.driver_path} configure --spacing {spacing_khz}"
         _, stderr = self.ssh.execute_command(command)
         if stderr:
             logging.error(f"Failed to set Broadcom sub-carrier spacing: {stderr}")
             return False
+        return True
+
+    def force_renegotiation(self) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        # The 'restart' or 'retrain' command is common for this.
+        # Using '--fast' often triggers a DRA event instead of a full resync.
+        command = f"{self.driver_path} restart --fast"
+        logging.info("Forcing fast renegotiation on Broadcom chipset...")
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to force Broadcom renegotiation: {stderr}")
+            return False
+        logging.info("Successfully triggered fast renegotiation.")
+        return True
+
+    def control_bitswap(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        state = "on" if enabled else "off"
+        command = f"{self.driver_path} configure --bitswap {state}"
+        logging.info(f"Setting Broadcom bit-swap to {state}...")
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom bit-swap state: {stderr}")
+            return False
+        logging.info(f"Successfully set bit-swap state to {state}.")
         return True
 
 
@@ -709,35 +760,62 @@ class LantiqDslHal(DslHalBase):
         if not self.driver_path:
             logging.error("Lantiq driver path not found.")
             return False
-        # Hypothetical sysfs node for writing a custom bit-loading table.
+        # The driver expects a string with one 'tone bits' pair per line.
         table_str = "\\n".join([f"{tone} {bits}" for tone, bits in bit_table.items()])
         command = f"echo -e \"{table_str}\" > {self.driver_path}/bitloading_table_override"
+        logging.info("Applying custom bit-loading table to Lantiq chipset...")
         _, stderr = self.ssh.execute_command(command)
         if stderr:
             logging.error(f"Failed to set Lantiq bit-loading table: {stderr}")
             return False
+        logging.info("Successfully applied bit-loading table.")
         return True
 
     def set_tone_activation(self, tone_map: dict[int, bool]) -> bool:
         if not self.driver_path:
             logging.error("Lantiq driver path not found.")
             return False
-        # Hypothetical sysfs node for controlling tone activation.
-        # Format could be a bitmask or a list of ranges.
-        active_mask = 0
-        for tone, is_active in tone_map.items():
-            if is_active:
-                active_mask |= (1 << tone)
-        command = f"echo {active_mask} > {self.driver_path}/tone_activation_mask"
+        # The driver expects a string with 'tone state' (1 for on, 0 for off) per line.
+        map_str = "\\n".join([f"{tone} {'1' if is_active else '0'}" for tone, is_active in tone_map.items()])
+        command = f"echo -e \"{map_str}\" > {self.driver_path}/tone_activation_override"
+        logging.info("Applying tone activation map to Lantiq chipset...")
         _, stderr = self.ssh.execute_command(command)
         if stderr:
             logging.error(f"Failed to set Lantiq tone activation: {stderr}")
             return False
+        logging.info("Successfully applied tone activation map.")
         return True
 
     def set_subcarrier_spacing(self, spacing_khz: float) -> bool:
         logging.error("Sub-carrier spacing manipulation is not typically supported on Lantiq chipsets.")
         raise NotImplementedError("Lantiq HAL does not support set_subcarrier_spacing.")
+
+    def force_renegotiation(self) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        command = f"echo 1 > {self.driver_path}/fast_retrain_trigger"
+        logging.info("Forcing fast renegotiation on Lantiq chipset...")
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to force Lantiq renegotiation: {stderr}")
+            return False
+        logging.info("Successfully triggered fast renegotiation.")
+        return True
+
+    def control_bitswap(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        state = "1" if enabled else "0"
+        command = f"echo {state} > {self.driver_path}/bitswap_control"
+        logging.info(f"Setting Lantiq bit-swap to {'enabled' if enabled else 'disabled'}...")
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq bit-swap state: {stderr}")
+            return False
+        logging.info(f"Successfully set bit-swap state to {'enabled' if enabled else 'disabled'}.")
+        return True
 
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
