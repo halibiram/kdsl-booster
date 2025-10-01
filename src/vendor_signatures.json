@@ -47,7 +47,17 @@
                     "vsi_patterns": ["MA5680T"]
                 }
             ]
-        }
+        },
+        "exploits": [
+            {
+                "name": "Kernel Parameter Manipulation (SNR Margin)",
+                "type": "kernel_manipulation",
+                "technique": "set_snr_margin",
+                "required_hal": "BroadcomDslHal",
+                "reliability": "high",
+                "stealth": "medium"
+            }
+        ]
     },
     "nokia_alcatel": {
         "snmp": {
