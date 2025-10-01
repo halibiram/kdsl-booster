@@ -145,6 +145,27 @@ class DslHalBase(ABC):
         """
         pass
 
+    @abstractmethod
+    def set_vectoring_state(self, enabled: bool) -> bool:
+        """
+        Enables or disables vectoring (G.993.5) on the modem.
+        Args:
+            enabled: True to enable vectoring, False to disable.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def get_vectoring_pilot_sequence(self) -> list[int] | None:
+        """
+        Retrieves the vectoring pilot sequence data from the modem.
+        This data is used for crosstalk analysis.
+        Returns:
+            A list of pilot sequence values, or None on failure.
+        """
+        pass
+
 class BroadcomDslHal(DslHalBase):
     """
     HAL for Broadcom DSL chipsets (e.g., BCM63xx series).
@@ -332,6 +353,41 @@ class BroadcomDslHal(DslHalBase):
             return False
         return True
 
+    def set_vectoring_state(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+
+        state = "on" if enabled else "off"
+        command = f"{self.driver_path} configure --vectoring {state}"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Broadcom vectoring state: {stderr}")
+            return False
+        logging.info(f"Broadcom vectoring state set to {state}.")
+        return True
+
+    def get_vectoring_pilot_sequence(self) -> list[int] | None:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return None
+
+        command = f"{self.driver_path} info --show --pilots"
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if stderr or not stdout:
+            logging.error(f"Failed to get Broadcom vectoring pilots: {stderr}")
+            return None
+
+        try:
+            # Assuming pilot data is a comma-separated list of integers
+            pilots = [int(p.strip()) for p in stdout.split(',')]
+            return pilots
+        except ValueError:
+            logging.error(f"Could not parse pilot sequence from output: {stdout}")
+            return None
+
 class LantiqDslHal(DslHalBase):
     """
     HAL for Lantiq (now Intel) DSL chipsets (e.g., VRX208/VRX288).
@@ -488,6 +544,42 @@ class LantiqDslHal(DslHalBase):
             logging.error(f"Failed to set Lantiq per-band PSD: {stderr}")
             return False
         return True
+
+    def set_vectoring_state(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+
+        state = "1" if enabled else "0"
+        command = f"echo {state} > {self.driver_path}/vectoring_state"
+        _, stderr = self.ssh.execute_command(command)
+
+        if stderr:
+            logging.error(f"Failed to set Lantiq vectoring state: {stderr}")
+            return False
+
+        logging.info(f"Lantiq vectoring state set to {'enabled' if enabled else 'disabled'}.")
+        return True
+
+    def get_vectoring_pilot_sequence(self) -> list[int] | None:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return None
+
+        command = f"cat {self.driver_path}/vectoring_pilots"
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if stderr or not stdout:
+            logging.error(f"Failed to get Lantiq vectoring pilots: {stderr}")
+            return None
+
+        try:
+            # Assuming pilot data is a space-separated list of integers
+            pilots = [int(p.strip()) for p in stdout.split()]
+            return pilots
+        except ValueError:
+            logging.error(f"Could not parse pilot sequence from Lantiq output: {stdout}")
+            return None
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {
