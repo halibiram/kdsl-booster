@@ -71,7 +71,10 @@ def test_full_end_to_end_workflow(signatures, mocker):
     mocker.patch('src.dslam_detector.DNSAnalyzer', return_value=mock_dns_analyzer)
 
     # --- 2. Initialization ---
-    detector = UniversalDSLAMDetector(mock_ssh, signature_file='src/vendor_signatures.json')
+    mock_db_manager = MagicMock()
+    mock_db_manager.get_all_signatures.return_value = signatures
+
+    detector = UniversalDSLAMDetector(mock_ssh, db_manager=mock_db_manager)
     profile_analyzer = VDSLProfileAnalyzer(mock_ghs_analyzer, mock_ssh, signatures)
     vectoring_analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_ssh, signatures)
     bonding_analyzer = BondingAnalyzer(mock_ghs_analyzer, mock_ssh, signatures)

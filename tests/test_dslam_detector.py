@@ -32,6 +32,10 @@ def signature_file(tmp_path):
 @pytest.fixture
 def dslam_detector(mock_ssh_interface, signature_file):
     """Provides a UniversalDSLAMDetector instance with mocked detection methods."""
+    # Mock the DatabaseManager to avoid file I/O in unit tests
+    mock_db_manager = MagicMock()
+    mock_db_manager.get_all_signatures.return_value = {} # Return empty sigs by default
+
     with patch.object(UniversalDSLAMDetector, '_detect_via_g_hs', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_snmp', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_dhcp', return_value=[]), \
@@ -39,7 +43,13 @@ def dslam_detector(mock_ssh_interface, signature_file):
          patch.object(UniversalDSLAMDetector, '_detect_via_tr069', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_timing', return_value=[]):
 
-        detector = UniversalDSLAMDetector(mock_ssh_interface, signature_file=signature_file)
+        detector = UniversalDSLAMDetector(mock_ssh_interface, db_manager=mock_db_manager)
+
+        # Load real signatures for the test's purpose and set them on the instance
+        with open(signature_file, 'r') as f:
+            sigs = json.load(f)
+        detector.signatures = sigs
+
         yield detector
 
 def test_identify_vendor_snmp_wins(dslam_detector):

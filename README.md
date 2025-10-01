@@ -53,3 +53,17 @@ You will see output detailing each step of the process, culminating in an AI-pow
 ## 📄 Project Specification
 
 For a deep dive into the project's technical architecture, phase-by-phase roadmap, and detailed specifications, please see the `PROJECT_SPECIFICATION.md` file.
+
+## 🏛️ Architecture and Extensibility
+
+The system is designed with a modular and extensible architecture to facilitate future enhancements, such as database integration and machine learning-powered predictions.
+
+### Database Abstraction
+
+Vendor-specific data, such as SNMP OIDs and capability mappings, is managed through the `DatabaseManager` class in `src/database_manager.py`. Currently, this class loads data from the `vendor_signatures.json` file, but it serves as an abstraction layer. To integrate a real database (e.g., SQL, NoSQL), you would only need to update the methods within this class to fetch data from the new source, without changing any of the analyzer classes that consume the data.
+
+### Machine Learning Integration
+
+The `MLEnhancer` class in `src/ml_enhancer.py` is a placeholder designed to showcase how machine learning models could be integrated into the workflow. Future work could involve:
+- **Capability Prediction**: Training a model to predict a DSLAM's full capabilities from a partial set of observations (e.g., predicting SNMP settings based on G.hs data).
+- **DSLAM Classification**: Training a model to classify a DSLAM vendor or model based on performance "fingerprints" like timing data and error rates, providing an alternative identification method when primary methods fail.
