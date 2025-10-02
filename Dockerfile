@@ -33,6 +33,10 @@ RUN apt-get update && \
 COPY keenetic-sdk-4.03 /opt/keenetic-sdk
 COPY requirements-mips.txt /opt/
 
+# Unpack the firmware to set up the toolchain
+WORKDIR /opt/keenetic-sdk
+RUN ./unpack.sh frimware.bin
+
 # Set up environment for the MIPS toolchain
 ENV PATH="/opt/keenetic-sdk/toolchain/bin:${PATH}"
 ENV STAGING_DIR="/opt/keenetic-sdk/staging_dir/toolchain-mipsel_24kc_gcc-8.4.0_glibc-2.27"
