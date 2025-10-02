@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+from src.noise_models import ImpulseNoise, SHINE, AMRadioInterference, REIN
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -58,7 +59,7 @@ class AdvancedDSLPhysics:
     SNR_GAP_DB = 12.8  # Represents implementation losses + target BER margin (more realistic than 9.8)
     MAX_BITS_PER_TONE = 15  # VDSL2 standard cap
 
-    def __init__(self, profile='17a', cable_model='etsi_05mm'):
+    def __init__(self, profile='17a', cable_model='etsi_05mm', noise_models: dict = None):
         if profile not in VDSL2_PROFILES:
             raise ValueError(f"Profile '{profile}' not supported. Available: {list(VDSL2_PROFILES.keys())}")
         if cable_model not in CABLE_MODELS:
@@ -68,7 +69,13 @@ class AdvancedDSLPhysics:
         self.tone_spacing = self.profile_data['tone_spacing_hz']
         self.tones = self._generate_tones()
         self.cable_params = CABLE_MODELS[cable_model]
+        self.noise_models = noise_models if noise_models else {}
+        # Initial background noise is the flat thermal noise floor
+        self.background_noise_psd_dbm_hz = np.full_like(self.tones, FLAT_NOISE_FLOOR_DBM_HZ)
+
         logging.info(f"Initialized physics model for VDSL2 profile {profile} using '{cable_model}' cable model.")
+        if self.noise_models:
+            logging.info(f"Noise models loaded: {list(self.noise_models.keys())}")
 
     def _generate_tones(self) -> np.ndarray:
         """Generates an array of frequencies for each active tone in the profile."""
@@ -179,15 +186,31 @@ class AdvancedDSLPhysics:
 
         return fext_psd_dbm_hz
 
-    def calculate_snr_per_tone(self, distance_m: int, n_disturbers: int = 10, temperature_c: float = 20.0) -> np.ndarray:
+    def update_background_noise(self, new_noise_psd_dbm_hz: np.ndarray):
+        """
+        Updates the background noise profile of the simulation.
+        This can be used to simulate changing line conditions.
+
+        Args:
+            new_noise_psd_dbm_hz (np.ndarray): The new background noise PSD in dBm/Hz.
+                                               Must have the same shape as self.tones.
+        """
+        if new_noise_psd_dbm_hz.shape != self.tones.shape:
+            raise ValueError("The new noise PSD must have the same shape as the tone array.")
+
+        self.background_noise_psd_dbm_hz = new_noise_psd_dbm_hz
+        logging.info("Background noise profile has been updated.")
+
+    def calculate_snr_per_tone(self, distance_m: int, n_disturbers: int = 10, temperature_c: float = 20.0, duration_sec: float = 1.0) -> np.ndarray:
         """
         Calculates the Signal-to-Noise Ratio (SNR) for each individual tone,
-        including the effects of FEXT crosstalk.
+        including the effects of FEXT crosstalk and other configured noise models.
 
         Args:
             distance_m: Line distance in meters.
             n_disturbers: The number of interfering lines in the cable bundle.
             temperature_c: Ambient temperature in Celsius.
+            duration_sec: The duration over which to model time-variant noise (e.g., impulse).
 
         Returns:
             A numpy array of SNR values in dB for each active tone.
@@ -197,27 +220,40 @@ class AdvancedDSLPhysics:
         attenuation_db = self.model_attenuation_per_tone(distance_m, temperature_c)
         rx_power_dbm_per_tone = tx_power_dbm_per_tone - attenuation_db
 
-        # 2. Calculate background thermal noise power per tone
-        thermal_noise_psd_dbm_hz = FLAT_NOISE_FLOOR_DBM_HZ
-        thermal_noise_power_mw = 10**(thermal_noise_psd_dbm_hz / 10) * self.tone_spacing
+        # 2. Calculate baseline noise (background + FEXT)
+        background_noise_power_mw = 10**(self.background_noise_psd_dbm_hz / 10) * self.tone_spacing
 
-        # 3. Calculate FEXT noise power per tone
         fext_noise_psd_dbm_hz = self.model_fext_noise_psd(n_disturbers, distance_m)
         fext_noise_power_mw = 10**(fext_noise_psd_dbm_hz / 10) * self.tone_spacing
 
-        # 4. Total noise is the sum of thermal and FEXT noise (in linear scale)
-        total_noise_power_mw = thermal_noise_power_mw + fext_noise_power_mw
-        total_noise_power_dbm = 10 * np.log10(total_noise_power_mw)
+        total_noise_power_mw = background_noise_power_mw + fext_noise_power_mw
 
-        # 5. Calculate SNR for each tone
+        # 3. Add noise from configured models
+        for name, model in self.noise_models.items():
+            logging.info(f"Applying noise model: {name}")
+            noise_psd_dbm_hz = 0
+            if isinstance(model, (ImpulseNoise, SHINE)):
+                # Symbol rate is the same as tone spacing in VDSL2
+                noise_psd_dbm_hz = model.generate_noise_psd(self.tones, self.tone_spacing, duration_sec)
+            elif isinstance(model, (AMRadioInterference, REIN)):
+                noise_psd_dbm_hz = model.generate_noise_psd(self.tones)
+            else:
+                logging.warning(f"Unknown noise model type for '{name}'. Skipping.")
+                continue
+
+            # Convert PSD to power and add to total
+            additional_noise_power_mw = 10**(noise_psd_dbm_hz / 10) * self.tone_spacing
+            total_noise_power_mw += additional_noise_power_mw
+
+        # 4. Calculate final SNR
         rx_power_mw = 10**(rx_power_dbm_per_tone / 10)
-        snr_linear = rx_power_mw / total_noise_power_mw
+        snr_linear = rx_power_mw / (total_noise_power_mw + 1e-20) # Add epsilon to avoid division by zero
         # Add a small epsilon to prevent log10(0) for tones with no signal
         snr_db = 10 * np.log10(snr_linear + 1e-30)
 
         return snr_db
 
-    def calculate_max_bitrate(self, distance_m: int, n_disturbers: int = 10, temperature_c: float = 20.0) -> float:
+    def calculate_max_bitrate(self, distance_m: int, n_disturbers: int = 10, temperature_c: float = 20.0, duration_sec: float = 1.0) -> float:
         """
         Calculates the maximum achievable data rate by summing the capacity of each tone.
         This uses a bit-loading algorithm based on the Shannon-Hartley theorem.
@@ -226,11 +262,12 @@ class AdvancedDSLPhysics:
             distance_m: The line distance in meters.
             n_disturbers: The number of interfering lines in the cable bundle.
             temperature_c: The ambient temperature in Celsius.
+            duration_sec: The duration over which to model time-variant noise.
 
         Returns:
             The maximum theoretical data rate in Mbps.
         """
-        snr_per_tone_db = self.calculate_snr_per_tone(distance_m, n_disturbers, temperature_c)
+        snr_per_tone_db = self.calculate_snr_per_tone(distance_m, n_disturbers, temperature_c, duration_sec)
 
         # Convert SNR from dB to a linear ratio and adjust for the SNR gap
         snr_gap_linear = 10 ** (self.SNR_GAP_DB / 10)
