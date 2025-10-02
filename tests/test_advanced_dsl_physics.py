@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 from src.advanced_dsl_physics import AdvancedDSLPhysics, VDSL2_PROFILES, CABLE_MODELS
+from src.noise_models import ImpulseNoise, AMRadioInterference, REIN
 
 # --- Test Fixtures ---
 
@@ -107,3 +108,53 @@ def test_bitrate_lower_for_inferior_cable(physics_17a_etsi, physics_17a_ansi):
     rate_etsi = physics_17a_etsi.calculate_max_bitrate(distance_m=800, n_disturbers=10)
     rate_ansi = physics_17a_ansi.calculate_max_bitrate(distance_m=800, n_disturbers=10)
     assert rate_ansi <= rate_etsi
+
+# --- Noise Model Integration Tests ---
+
+def test_snr_with_impulse_noise(physics_17a_etsi):
+    """Tests that SNR is lower when impulse noise is added."""
+    snr_baseline = physics_17a_etsi.calculate_snr_per_tone(distance_m=500)
+
+    impulse_model = ImpulseNoise(arrival_rate_per_sec=5)
+    physics_with_noise = AdvancedDSLPhysics(
+        profile='17a',
+        cable_model='etsi_05mm',
+        noise_models={'impulse': impulse_model}
+    )
+    snr_with_impulse = physics_with_noise.calculate_snr_per_tone(distance_m=500, duration_sec=10)
+
+    # The average SNR should be lower when impulse noise is present
+    assert np.mean(snr_with_impulse) < np.mean(snr_baseline)
+
+def test_bitrate_with_am_radio_interference(physics_17a_etsi):
+    """Tests that bitrate is reduced by AM radio interference."""
+    rate_baseline = physics_17a_etsi.calculate_max_bitrate(distance_m=400)
+
+    stations = [{'frequency_hz': 1e6, 'power_dbm': -60, 'bandwidth_hz': 10e3}]
+    am_model = AMRadioInterference(stations)
+    physics_with_rfi = AdvancedDSLPhysics(
+        profile='17a',
+        cable_model='etsi_05mm',
+        noise_models={'am_radio': am_model}
+    )
+    rate_with_rfi = physics_with_rfi.calculate_max_bitrate(distance_m=400)
+
+    assert rate_with_rfi < rate_baseline
+
+def test_background_noise_adaptation(physics_17a_etsi):
+    """Tests that updating the background noise affects SNR."""
+    snr_before = physics_17a_etsi.calculate_snr_per_tone(distance_m=500)
+
+    # Create a new, higher noise floor
+    new_noise_floor = np.full_like(physics_17a_etsi.tones, -120.0)
+    physics_17a_etsi.update_background_noise(new_noise_floor)
+
+    snr_after = physics_17a_etsi.calculate_snr_per_tone(distance_m=500)
+
+    assert np.all(snr_after < snr_before)
+
+def test_update_background_noise_with_wrong_shape_raises_error(physics_17a_etsi):
+    """Tests that updating background noise with a mismatched shape raises a ValueError."""
+    invalid_noise_profile = np.array([-140.0, -130.0])
+    with pytest.raises(ValueError, match="must have the same shape"):
+        physics_17a_etsi.update_background_noise(invalid_noise_profile)
