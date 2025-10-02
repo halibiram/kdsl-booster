@@ -352,6 +352,16 @@ class DslHalBase(ABC):
             logging.error(f"Failed to apply latency profile '{profile}': {e}")
             return False
 
+    @abstractmethod
+    def get_link_status(self) -> str:
+        """
+        Retrieves the current link status of the DSL line.
+        Common statuses include 'Up', 'Down', 'Training', 'Idle'.
+        Returns:
+            A string representing the link status.
+        """
+        pass
+
 
 class BroadcomDslHal(DslHalBase):
     """
@@ -762,6 +772,27 @@ class BroadcomDslHal(DslHalBase):
         logging.info(f"Broadcom INP set to {value}.")
         return True
 
+    def get_link_status(self) -> str:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return "Down"
+
+        command = f"{self.driver_path} info --show"
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if stderr or not stdout:
+            logging.error(f"Failed to get Broadcom link status: {stderr}")
+            return "Down"
+
+        for line in stdout.splitlines():
+            if "Status:" in line:
+                try:
+                    # e.g., "Status: Showtime"
+                    return line.split(':')[1].strip().split(' ')[0]
+                except IndexError:
+                    continue
+        return "Unknown"
+
 
 class LantiqDslHal(DslHalBase):
     """
@@ -1133,6 +1164,21 @@ class LantiqDslHal(DslHalBase):
             return False
         logging.info(f"Lantiq INP set to {value}.")
         return True
+
+    def get_link_status(self) -> str:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return "Down"
+
+        command = f"cat {self.driver_path}/link_status"
+        stdout, stderr = self.ssh.execute_command(command)
+
+        if stderr or not stdout:
+            logging.error(f"Failed to read Lantiq link status: {stderr}")
+            return "Down"
+
+        # The status is usually a single word, e.g., "Up", "Training", "Down"
+        return stdout.strip()
 
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
