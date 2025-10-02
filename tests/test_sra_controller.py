@@ -20,6 +20,8 @@ class TestSRAController(unittest.TestCase):
         self.mock_hal.control_bitswap.return_value = True
         self.mock_hal.set_snr_margin.return_value = True
         self.mock_hal.set_upstream_power_boost.return_value = True
+        self.mock_hal.get_qln_data.return_value = {}
+        self.mock_hal.get_hlog_data.return_value = {}
 
     def test_initial_state_is_stable(self):
         """Test that the controller initializes in the STABLE state."""

@@ -74,9 +74,13 @@ class LineDiagnostics:
                     "anomaly_db": noise_level - FLAT_NOISE_FLOOR_DBM_HZ,
                 }
 
+        average_noise = 0
+        if qln_data:
+            average_noise = sum(qln_data.values()) / len(qln_data)
+
         analysis = {
             "status": "completed",
-            "average_noise_dbm_hz": sum(qln_data.values()) / len(qln_data) if qln_data else 0,
+            "average_noise_dbm_hz": average_noise,
             "anomalous_tones_found": len(anomalous_tones),
             "anomalous_tones": anomalous_tones,
             "raw_data": qln_data,

@@ -1,19 +1,12 @@
 import time
 import logging
-from enum import Enum
 from src.keenetic_dsl_interface import DslHalBase
+from src.line_diagnostics import LineDiagnostics
+from src.stability_manager import StabilityManager
+from src.enums import SRAState, LineQuality
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-
-class SRAState(Enum):
-    """Represents the operational state of the SRA controller."""
-    STABLE = "Stable"
-    UNSTABLE = "Unstable"
-    OPTIMIZING_UP = "Optimizing for Higher Rate"
-    OPTIMIZING_DOWN = "Optimizing for Lower Rate"
-    POWER_SAVING = "Power Saving"
 
 
 class SRAController:
@@ -23,23 +16,29 @@ class SRAController:
     between performance, stability, and power consumption.
     """
 
-    def __init__(self, hal: DslHalBase, traffic_monitor=None):
+    def __init__(self, hal: DslHalBase, traffic_monitor=None, diagnostics: LineDiagnostics = None):
         """
         Initializes the SRA Controller.
 
         Args:
             hal: An instance of a DslHalBase implementation for hardware interaction.
             traffic_monitor: An optional utility to monitor network traffic volume.
+            diagnostics: An optional instance of LineDiagnostics for deeper line analysis.
         """
         self.hal = hal
         self.traffic_monitor = traffic_monitor
+        self.diagnostics = diagnostics if diagnostics else LineDiagnostics(hal)
+        self.stability_manager = StabilityManager(hal, self)
         self.state = SRAState.STABLE
+        self.line_quality = LineQuality.GOOD  # Start with a reasonable default
         self.is_running = False
         self.last_crc_errors = 0
         self.stable_since_time = time.time()
         self.last_check_time = time.time()
         self.current_power_boost_db = 0
         self.current_latency_profile = 'stable'  # Start with a safe default
+        self.last_stable_config = {}
+        self.disconnect_events = 0
 
         # --- SRA Tuning Parameters ---
         self.monitoring_interval_s = 10
@@ -57,6 +56,101 @@ class SRAController:
         self.crc_threshold_for_stable_latency = 5 # If new errors exceed this, switch to 'stable' profile
         self.crc_threshold_for_fast_latency = 0 # New errors must be below this to switch to 'fast'
 
+        # --- Conservative Profile Definitions ---
+        self.conservative_profiles = {
+            LineQuality.POOR: {
+                'snr_margin_target_db': 9,  # Target a higher, more stable SNR margin
+                'latency_profile': 'stable',
+                'inp': 2,  # Increase Impulse Noise Protection
+            },
+            LineQuality.VERY_POOR: {
+                'snr_margin_target_db': 12, # Target a very high SNR margin
+                'latency_profile': 'stable',
+                'inp': 4,  # Maximize Impulse Noise Protection
+            }
+        }
+
+    def _save_stable_config(self):
+        """Saves the last known good configuration of the line."""
+        current_snr = self.hal.get_snr_margin()
+        if current_snr is not None:
+            self.last_stable_config = {
+                'snr_margin': int(current_snr * 10),
+                'latency_profile': self.current_latency_profile,
+                'power_boost_db': self.current_power_boost_db,
+            }
+            logging.info(f"Saved stable configuration: {self.last_stable_config}")
+
+    def _revert_to_stable_config(self):
+        """Reverts the line settings to the last known good configuration."""
+        if not self.last_stable_config:
+            logging.warning("No stable configuration saved. Cannot revert.")
+            return
+
+        logging.warning(f"Reverting to last known stable configuration: {self.last_stable_config}")
+        config = self.last_stable_config
+        self.hal.set_snr_margin(config['snr_margin'])
+        self.hal.set_latency_profile(config['latency_profile'])
+        self.hal.set_upstream_power_boost(config['power_boost_db'])
+        # Reset state to allow for re-stabilization
+        self.state = SRAState.STABLE
+        self.stable_since_time = time.time()
+
+    def _check_for_disconnect(self) -> bool:
+        """
+        Checks if the line has disconnected and triggers a revert if so.
+        Returns:
+            True if the line is disconnected, False otherwise.
+        """
+        link_status = self.hal.get_link_status()
+        if link_status.lower() not in ['up', 'showtime']:
+            logging.error(f"Link is down! (Status: {link_status}). Reverting to last stable config.")
+            self.disconnect_events += 1
+            self._revert_to_stable_config()
+            # Give the line time to recover before the next check
+            time.sleep(self.monitoring_interval_s * 2)
+            return True
+        return False
+
+    def _assess_line_quality(self, new_errors: int) -> LineQuality:
+        """
+        Assesses the current line quality based on CRC errors and diagnostic data.
+
+        Args:
+            new_errors: The number of new CRC errors since the last check.
+
+        Returns:
+            The assessed LineQuality.
+        """
+        # --- CRC-based Assessment ---
+        if new_errors > self.crc_error_threshold * 2:
+            logging.warning("Line quality is VERY_POOR due to high CRC errors.")
+            return LineQuality.VERY_POOR
+        if new_errors > self.crc_error_threshold:
+            logging.warning("Line quality is POOR due to moderate CRC errors.")
+            return LineQuality.POOR
+
+        # --- Diagnostic-based Assessment (if available) ---
+        if self.diagnostics:
+            qln_analysis = self.diagnostics.analyze_qln()
+            hlog_analysis = self.diagnostics.analyze_hlog()
+
+            qln_anomalies = qln_analysis.get("anomalous_tones_found", 0)
+            hlog_deviations = hlog_analysis.get("deviating_tones_found", 0)
+
+            if qln_anomalies > 50 or hlog_deviations > 100:
+                logging.warning("Line quality is POOR due to high QLN/Hlog anomalies.")
+                return LineQuality.POOR
+            if qln_anomalies > 10 or hlog_deviations > 20:
+                logging.info("Line quality is GOOD, with some QLN/Hlog anomalies.")
+                return LineQuality.GOOD
+
+        # --- Default Assessment ---
+        if new_errors == 0:
+            return LineQuality.EXCELLENT
+        else:
+            return LineQuality.GOOD
+
     def _update_state_and_latency(self):
         """
         Analyzes line statistics and traffic to determine the current state of the line
@@ -66,14 +160,18 @@ class SRAController:
         if not current_stats:
             logging.warning("Could not retrieve line stats. Assuming UNSTABLE.")
             self.state = SRAState.UNSTABLE
+            self.line_quality = LineQuality.VERY_POOR
             self._update_latency_profile(is_unstable=True)
             return
 
         current_crc_errors = current_stats.get('crc_errors', 0)
         new_errors = current_crc_errors - self.last_crc_errors
 
-        if new_errors > self.crc_error_threshold:
-            logging.warning(f"Line has become unstable with {new_errors} new CRC errors.")
+        # Assess line quality based on new errors and other diagnostics
+        self.line_quality = self._assess_line_quality(new_errors)
+
+        if self.line_quality in [LineQuality.POOR, LineQuality.VERY_POOR]:
+            logging.warning(f"Line has become unstable with quality '{self.line_quality.value}' and {new_errors} new CRC errors.")
             self.state = SRAState.UNSTABLE
             self.stable_since_time = time.time()  # Reset stable timer
             self._update_latency_profile(is_unstable=True)
@@ -143,6 +241,7 @@ class SRAController:
         if self.state == SRAState.UNSTABLE:
             self.stabilize_line()
         elif self.state == SRAState.OPTIMIZING_UP:
+            self._save_stable_config()  # Save config before attempting a risky optimization
             self.request_rate_increase(force_retrain=True)
         elif self.state == SRAState.POWER_SAVING:
             self.request_rate_decrease()
@@ -184,14 +283,10 @@ class SRAController:
 
     def stabilize_line(self):
         """
-        Action taken when the line is unstable. The primary goal is to
-        increase the SNR margin to regain stability.
+        Action taken when the line is unstable. Delegates the stabilization
+        logic to the StabilityManager.
         """
-        current_snr = self.hal.get_snr_margin()
-        if current_snr is not None:
-            target_snr = current_snr + self.snr_increase_step_db
-            logging.info(f"Stabilizing line: Increasing SNR margin to {target_snr:.1f} dB.")
-            self.hal.set_snr_margin(int(target_snr * 10))
+        self.stability_manager.stabilize_line()
 
     def request_rate_increase(self, force_retrain: bool = False):
         """
@@ -241,15 +336,20 @@ class SRAController:
         initial_stats = self.hal.get_line_stats()
         self.last_crc_errors = initial_stats.get('crc_errors', 0) if initial_stats else 0
         self.last_check_time = start_time
-        # Set initial latency profile
+        # Set initial latency profile and save it as the first stable config
         self.hal.set_latency_profile(self.current_latency_profile)
+        self._save_stable_config()
 
         while self.is_running and time.time() < end_time:
+            # Check for disconnects first
+            if self._check_for_disconnect():
+                continue  # Skip the rest of the loop to allow recovery
+
             self._update_state_and_latency()
             self._run_state_action()
             time.sleep(self.monitoring_interval_s)
 
-        logging.info("SRA controller has finished its run.")
+        logging.info(f"SRA controller has finished its run. Total disconnect events: {self.disconnect_events}")
         self.is_running = False
 
     def stop(self):
