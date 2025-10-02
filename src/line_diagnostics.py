@@ -1,9 +1,18 @@
 import logging
+import numpy as np
+from scipy.signal import find_peaks
 from src.keenetic_dsl_interface import DslHalBase
 from src.advanced_dsl_physics import AdvancedDSLPhysics, FLAT_NOISE_FLOOR_DBM_HZ
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Constants for diagnostic analysis
+SPEED_OF_LIGHT = 299792458  # meters per second
+VELOCITY_FACTOR = 0.66  # Typical velocity of propagation in copper pairs
+LOADING_COIL_CUTOFF_FREQ_HZ = 80000 # Loading coils sharply cut off frequencies above ~80kHz
+LOADING_COIL_ATTENUATION_THRESHOLD_DB = 20 # Attenuation at cutoff freq to be considered a coil
+BRIDGED_TAP_MIN_PROMINENCE = 3 # Min dB prominence to consider a null a real bridged tap signature
 
 class LineDiagnostics:
     """
@@ -133,3 +142,68 @@ class LineDiagnostics:
         }
         logging.info(f"Hlog analysis complete. Found {len(deviating_tones)} deviating tones.")
         return analysis
+
+    def detect_loading_coils(self) -> dict:
+        """
+        Detects the presence of loading coils by checking for a sharp Hlog cutoff.
+        """
+        logging.info("Checking for loading coils...")
+        hlog_data = self.hal.get_hlog_data()
+        if not hlog_data:
+            return {"status": "error", "message": "Could not get Hlog data."}
+
+        # Find the tone closest to the cutoff frequency
+        cutoff_tone_index = int(LOADING_COIL_CUTOFF_FREQ_HZ / self.physics.tone_spacing)
+
+        if cutoff_tone_index in hlog_data and hlog_data[cutoff_tone_index] > LOADING_COIL_ATTENUATION_THRESHOLD_DB:
+            msg = f"High attenuation ({hlog_data[cutoff_tone_index]:.1f} dB) at tone {cutoff_tone_index} indicates a likely loading coil."
+            logging.warning(msg)
+            return {"status": "completed", "loading_coil_detected": True, "message": msg}
+        else:
+            msg = "No evidence of loading coils found."
+            logging.info(msg)
+            return {"status": "completed", "loading_coil_detected": False, "message": msg}
+
+    def detect_bridged_taps(self) -> dict:
+        """
+        Detects bridged taps by looking for periodic nulls in the Hlog data.
+        """
+        logging.info("Checking for bridged taps...")
+        hlog_data = self.hal.get_hlog_data()
+        if not hlog_data:
+            return {"status": "error", "message": "Could not get Hlog data."}
+
+        # Convert Hlog to numpy arrays for analysis
+        tones = np.array(sorted(hlog_data.keys()))
+        hlog_values = np.array([hlog_data[t] for t in tones])
+        frequencies = tones * self.physics.tone_spacing
+
+        # Find peaks (which are nulls in the transfer function) in the Hlog data
+        peaks, properties = find_peaks(hlog_values, prominence=BRIDGED_TAP_MIN_PROMINENCE, width=5)
+
+        if len(peaks) < 2:
+            msg = "Not enough significant nulls found to indicate a bridged tap."
+            logging.info(msg)
+            return {"status": "completed", "bridged_tap_detected": False, "message": msg}
+
+        # Calculate the frequency spacing between the nulls
+        peak_frequencies = frequencies[peaks]
+        deltas = np.diff(peak_frequencies)
+        avg_delta_f = np.mean(deltas)
+
+        # Estimate tap length: L = v_p / (2 * delta_f)
+        velocity_of_propagation = SPEED_OF_LIGHT * VELOCITY_FACTOR
+        estimated_length_m = velocity_of_propagation / (2 * avg_delta_f)
+
+        msg = f"Detected {len(peaks)} periodic nulls with avg spacing {avg_delta_f/1e3:.1f} kHz, suggesting a bridged tap of ~{estimated_length_m:.1f}m."
+        logging.info(msg)
+
+        return {
+            "status": "completed",
+            "bridged_tap_detected": True,
+            "message": msg,
+            "estimated_tap_length_m": round(estimated_length_m, 2),
+            "null_count": len(peaks),
+            "avg_null_spacing_hz": round(avg_delta_f, 2),
+            "detected_null_frequencies_hz": peak_frequencies.tolist()
+        }

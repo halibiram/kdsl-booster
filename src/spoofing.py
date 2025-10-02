@@ -11,7 +11,6 @@ import time
 import logging
 import numpy as np
 
-from src.crosstalk_simulator import CrosstalkSimulator
 from src.entware_ssh import EntwareSSHInterface
 from src.keenetic_dsl_interface import KeeneticDSLInterface
 from src.advanced_dsl_physics import AdvancedDSLPhysics
@@ -438,47 +437,52 @@ class KernelDSLManipulator:
 
         return success
 
-    def mitigate_crosstalk(self, aggressor_count: int = 2, mode: str = 'snr') -> bool:
+    def mitigate_crosstalk(self, distance_m: int, aggressor_count: int = 2, mode: str = 'snr') -> bool:
         """
-        Simulates crosstalk from a number of aggressors and attempts to mitigate
-        it by adjusting line parameters.
+        Calculates the impact of crosstalk from a number of aggressors and attempts
+        to mitigate it by adjusting line parameters.
 
         Args:
+            distance_m: The line distance in meters, required for accurate FEXT calculation.
             aggressor_count (int): The number of interfering lines to simulate.
             mode (str): The mitigation strategy to use ('snr' or 'power').
 
         Returns:
             bool: True if a mitigation action was successfully applied.
         """
-        logging.info(f"Starting crosstalk mitigation simulation for {aggressor_count} aggressors...")
+        logging.info(f"Starting crosstalk mitigation for {aggressor_count} aggressors at {distance_m}m...")
 
-        # 1. Simulate the crosstalk noise profile.
-        simulator = CrosstalkSimulator(aggressor_count=aggressor_count)
-        fext_profile = simulator.generate_fext_profile()
-        total_fext_power = np.sum(fext_profile)
+        # 1. Calculate the FEXT noise Power Spectral Density using the physics model.
+        fext_psd_dbm_hz = self.physics.model_fext_noise_psd(
+            n_disturbers=aggressor_count,
+            distance_m=distance_m
+        )
 
-        logging.info(f"Simulated total FEXT power: {total_fext_power:.2e} W/Hz")
+        # 2. Convert PSD from dBm/Hz to total power in mW to get a single metric for the heuristic.
+        fext_power_per_tone_mw = (10**(fext_psd_dbm_hz / 10)) * self.physics.tone_spacing
+        total_fext_power_mw = np.sum(fext_power_per_tone_mw)
 
-        # 2. Apply a mitigation strategy based on the simulated noise.
+        logging.info(f"Calculated total FEXT power: {total_fext_power_mw:.4f} mW")
+
+        # 3. Apply a mitigation strategy based on the calculated noise power.
         if mode == 'snr':
             # Strategy: Increase the target SNR margin to create more headroom against the noise.
-            # This is a simplified heuristic: add 1 dB of margin for every 1e-18 W/Hz of noise.
+            # Heuristic: Add 1 dB of margin for every 0.1 mW of total FEXT power.
             current_snr = self.hal.get_snr_margin()
             if current_snr is None:
                 logging.error("Cannot apply SNR mitigation: failed to get current SNR.")
                 return False
 
-            snr_increase = int(total_fext_power / 1e-18)
+            snr_increase = int(total_fext_power_mw / 0.1)
             target_snr = current_snr + snr_increase
 
             logging.info(f"Mitigation: increasing SNR margin by {snr_increase} dB to a target of {target_snr:.1f} dB.")
-            # Value must be converted to 0.1 dB for the HAL
             return self.hal.set_snr_margin(int(target_snr * 10))
 
         elif mode == 'power':
             # Strategy: Boost upstream power to "shout over" the noise.
-            # Heuristic: increase power by 1 dB for every 2e-18 W/Hz of noise.
-            power_boost = int(total_fext_power / 2e-18)
+            # Heuristic: Increase power by 1 dB for every 0.2 mW of total FEXT power.
+            power_boost = int(total_fext_power_mw / 0.2)
             logging.info(f"Mitigation: applying upstream power boost of {power_boost} dB.")
             return self.hal.set_upstream_power_boost(power_boost)
 

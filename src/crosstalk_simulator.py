@@ -1,105 +1,92 @@
-"""
-This module provides the CrosstalkSimulator class, which is responsible for
-generating realistic crosstalk noise profiles based on physical models.
-
-Crosstalk is a major limiting factor in DSL performance, and by simulating it,
-we can develop and test mitigation strategies in a controlled manner.
-"""
 import logging
-import numpy as np
+import pandas as pd
+from src.advanced_dsl_physics import AdvancedDSLPhysics
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class CrosstalkSimulator:
+class CableBundleSimulator:
     """
-    Generates simulated FEXT (Far-End Crosstalk) and NEXT (Near-End Crosstalk)
-    noise profiles for DSL lines.
+    Simulates the performance of multiple DSL lines within a single cable bundle,
+    focusing on the impact of Far-End Crosstalk (FEXT) on achievable bitrates.
     """
-
-    def __init__(self, num_tones: int = 4096, aggressor_count: int = 1):
+    def __init__(self, num_pairs: int, distance_m: int, profile: str = '17a', cable_model: str = 'etsi_05mm'):
         """
-        Initializes the simulator.
+        Initializes the cable bundle simulator.
 
         Args:
-            num_tones (int): The number of tones in the DSL signal (e.g., 4096 for VDSL2).
-            aggressor_count (int): The number of interfering lines to simulate.
+            num_pairs: The total number of twisted pairs in the cable bundle.
+            distance_m: The length of the cable in meters.
+            profile: The VDSL2 profile to be used for all lines.
+            cable_model: The cable model to be used for all lines.
         """
-        self.num_tones = num_tones
-        self.aggressor_count = aggressor_count
-        # A simplified crosstalk coupling constant. In reality, this is frequency-dependent.
-        self.fext_coupling_k = 9e-20
+        if num_pairs < 2:
+            raise ValueError("Cable bundle must have at least 2 pairs to simulate crosstalk.")
 
-    def _calculate_psd(self, tone_index: int) -> float:
+        self.num_pairs = num_pairs
+        self.distance_m = distance_m
+        self.profile = profile
+        self.cable_model = cable_model
+        self.physics = AdvancedDSLPhysics(profile=self.profile, cable_model=self.cable_model)
+        logging.info(f"Initialized Cable Bundle Simulator: {num_pairs} pairs, {distance_m}m, profile {profile}, model '{cable_model}'.")
+
+    def run_simulation(self) -> pd.DataFrame:
         """
-        Calculates a simplified Power Spectral Density (PSD) for a given tone.
-        This model assumes a constant -40 dBm/Hz, which is a common value for VDSL2.
-        """
-        # A more complex model would vary this based on the VDSL2 band plan.
-        return 1e-7  # Corresponds to -40 dBm/Hz
+        Runs the simulation for the entire cable bundle.
 
-    def generate_fext_profile(self, custom_aggressor_psd: np.ndarray = None) -> np.ndarray:
-        """
-        Generates a Far-End Crosstalk (FEXT) noise profile.
-
-        FEXT is the noise induced on a victim line by signals traveling in the
-        same direction on aggressor lines. It increases with frequency.
-
-        Args:
-            custom_aggressor_psd (np.ndarray, optional): A custom PSD for aggressor lines.
-                                                         If None, a default is calculated.
+        It calculates the performance of each line under two conditions:
+        1. In isolation (no crosstalk).
+        2. As a "victim" line, affected by FEXT from all other lines in the bundle.
 
         Returns:
-            np.ndarray: An array of FEXT noise values (in Watts/Hz) for each tone.
+            A pandas DataFrame containing the simulation results for each line.
         """
-        logging.info(f"Generating FEXT profile for {self.aggressor_count} aggressor(s)...")
-        fext_profile = np.zeros(self.num_tones)
-        tone_frequency_spacing = 4312.5  # Hz for VDSL2
+        logging.info(f"Starting simulation for {self.num_pairs}-pair bundle...")
+        results = []
 
-        aggressor_psd = np.zeros(self.num_tones)
-        if custom_aggressor_psd is not None and len(custom_aggressor_psd) == self.num_tones:
-            aggressor_psd = custom_aggressor_psd
-        else:
-            for i in range(self.num_tones):
-                aggressor_psd[i] = self._calculate_psd(i)
+        # In this model, all other lines are considered disturbers.
+        n_disturbers = self.num_pairs - 1
 
-        for i in range(self.num_tones):
-            frequency = (i + 1) * tone_frequency_spacing
-            # FEXT model: FEXT = N * k * (f^2) * |H(f)|^2 * PSD_aggressor
-            # We simplify |H(f)|^2 (channel transfer function) to 1 for this simulation.
-            fext_profile[i] = self.aggressor_count * self.fext_coupling_k * (frequency ** 2) * aggressor_psd[i]
+        # First, calculate the ideal bitrate with no crosstalk
+        ideal_bitrate = self.physics.calculate_max_bitrate(
+            distance_m=self.distance_m,
+            n_disturbers=0
+        )
 
-        return fext_profile
+        # Then, calculate the bitrate when subjected to FEXT from all other pairs
+        crosstalk_bitrate = self.physics.calculate_max_bitrate(
+            distance_m=self.distance_m,
+            n_disturbers=n_disturbers
+        )
 
-    def generate_next_profile(self) -> np.ndarray:
-        """
-        Generates a Near-End Crosstalk (NEXT) noise profile.
+        for i in range(self.num_pairs):
+            line_id = i + 1
+            performance_loss = ideal_bitrate - crosstalk_bitrate
+            performance_loss_percent = (performance_loss / ideal_bitrate) * 100 if ideal_bitrate > 0 else 0
 
-        NEXT is noise from signals traveling in the opposite direction. It is
-        generally much stronger than FEXT but is less of an issue in modern DSL
-        systems due to frequency division duplexing (FDD). This is included
-        for completeness.
+            results.append({
+                "Line ID": line_id,
+                "Distance (m)": self.distance_m,
+                "Bitrate (No Crosstalk) Mbps": ideal_bitrate,
+                "Bitrate (With FEXT) Mbps": crosstalk_bitrate,
+                "Performance Loss (Mbps)": performance_loss,
+                "Performance Loss (%)": performance_loss_percent
+            })
 
-        Returns:
-            np.ndarray: An array of NEXT noise values (in Watts/Hz) for each tone.
-        """
-        logging.info(f"Generating NEXT profile for {self.aggressor_count} aggressor(s)...")
-        # NEXT is often modeled as relatively flat across frequencies in simplified models.
-        # We will use a constant value for this simulation.
-        next_power = 1e-11 # A constant -80 dBm/Hz noise floor
-        next_profile = np.full(self.num_tones, next_power * self.aggressor_count)
-        return next_profile
+        logging.info("Simulation complete.")
 
-    def combine_noise_sources(self, fext_profile: np.ndarray, next_profile: np.ndarray) -> np.ndarray:
-        """
-        Combines different noise profiles into a single total noise profile.
+        # Create a pandas DataFrame for better visualization
+        df = pd.DataFrame(results)
+        df.set_index("Line ID", inplace=True)
 
-        Args:
-            fext_profile (np.ndarray): The FEXT noise profile.
-            next_profile (np.ndarray): The NEXT noise profile.
+        # Calculate and add summary statistics
+        summary = {
+            "Distance (m)": self.distance_m,
+            "Bitrate (No Crosstalk) Mbps": df["Bitrate (No Crosstalk) Mbps"].mean(),
+            "Bitrate (With FEXT) Mbps": df["Bitrate (With FEXT) Mbps"].mean(),
+            "Performance Loss (Mbps)": df["Performance Loss (Mbps)"].mean(),
+            "Performance Loss (%)": df["Performance Loss (%)"].mean()
+        }
+        df.loc['Average'] = summary
 
-        Returns:
-            np.ndarray: The total combined noise profile.
-        """
-        # Incoherent noise sources add together.
-        return fext_profile + next_profile
+        return df.round(2)
