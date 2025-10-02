@@ -30,7 +30,7 @@ def test_snmp_manager_get_success(mock_subprocess_run):
     mock_process.returncode = 0
     mock_subprocess_run.return_value = mock_process
 
-    manager = SNMPManager(host='127.0.0.1')
+    manager = SNMPManager(log_manager=MagicMock(), host='127.0.0.1')
     result = manager.get('1.3.6.1.2.1.1.1.0')
 
     assert result == 'Mock DSLAM Device'
@@ -45,7 +45,7 @@ def test_snmp_manager_get_no_value(mock_subprocess_run):
     mock_process.returncode = 0
     mock_subprocess_run.return_value = mock_process
 
-    manager = SNMPManager(host='127.0.0.1')
+    manager = SNMPManager(log_manager=MagicMock(), host='127.0.0.1')
     result = manager.get('1.3.6.1.2.1.1.1.0')
 
     assert result == ''
@@ -57,7 +57,7 @@ def test_snmp_manager_get_command_error(mock_subprocess_run):
         returncode=1, cmd=['snmpget'], stderr="Timeout: No Response from 127.0.0.1"
     )
 
-    manager = SNMPManager(host='127.0.0.1')
+    manager = SNMPManager(log_manager=MagicMock(), host='127.0.0.1')
     result = manager.get('1.3.6.1.2.1.1.1.0')
 
     assert result is None
@@ -68,7 +68,7 @@ def test_snmp_manager_set_success(mock_subprocess_run):
     mock_process.returncode = 0
     mock_subprocess_run.return_value = mock_process
 
-    manager = SNMPManager(host='127.0.0.1')
+    manager = SNMPManager(log_manager=MagicMock(), host='127.0.0.1')
     result = manager.set('1.2.3.4', 'NewValue', value_type='s')
 
     assert result is True
@@ -84,7 +84,7 @@ def test_adtran_set_line_profile(mock_subprocess_run):
     mock_process = MagicMock(returncode=0)
     mock_subprocess_run.return_value = mock_process
 
-    adtran_snmp = AdtranSnmp(host='127.0.0.1')
+    adtran_snmp = AdtranSnmp(log_manager=MagicMock(), host='127.0.0.1')
     result = adtran_snmp.set_line_profile('VDSL2_17A', interface_index=3)
 
     assert result is True
@@ -99,7 +99,7 @@ def test_huawei_set_line_profile_assignment(mock_subprocess_run):
     mock_process = MagicMock(returncode=0)
     mock_subprocess_run.return_value = mock_process
 
-    huawei_snmp = HuaweiSnmp(host='127.0.0.1')
+    huawei_snmp = HuaweiSnmp(log_manager=MagicMock(), host='127.0.0.1')
     result = huawei_snmp.set_line_profile_assignment(profile_index=22, interface_index=5)
 
     assert result is True
@@ -138,7 +138,8 @@ def test_dslam_detector_snmp_integration(mock_subprocess_run):
     detector = UniversalDSLAMDetector(
         target_ip='127.0.0.1',
         community_string='public',
-        db_manager=mock_db_manager
+        db_manager=mock_db_manager,
+        log_manager=MagicMock()
     )
 
     # Run the SNMP detection method

@@ -9,39 +9,38 @@ import json
 import logging
 import os
 from collections import defaultdict
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from src.log_manager import LogManager
 
 class DatabaseManager:
     """
     Manages access to the vendor signature database and logs exploitation attempts.
     """
 
-    def __init__(self, signature_file_path: str = 'src/vendor_signatures.json', exploitation_log_path: str = 'exploitation_log.json'):
+    def __init__(self, log_manager: LogManager, signature_file_path: str = 'src/vendor_signatures.json', exploitation_log_path: str = 'exploitation_log.json'):
         """
         Initializes the manager, loads signature data, and sets up the exploitation log.
 
         Args:
+            log_manager: An instance of the LogManager.
             signature_file_path: The path to the JSON file containing signatures.
             exploitation_log_path: The path to the file for logging exploitation attempts.
         """
+        self.log_manager = log_manager
         self.signature_file_path = signature_file_path
         self.exploitation_log_path = exploitation_log_path
         self.signatures = self._load_signatures()
-        self.logger = logging.getLogger(self.__class__.__name__)
 
     def _load_signatures(self) -> dict:
         """
         Loads vendor signatures from the JSON file.
         In the future, this could be replaced with a database connection.
         """
-        logging.info(f"Loading signatures from {self.signature_file_path}...")
+        self.log_manager.log("load_signatures", {"path": self.signature_file_path})
         try:
             with open(self.signature_file_path, 'r') as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            logging.critical(f"Failed to load signature database from {self.signature_file_path}: {e}")
+            self.log_manager.log("load_signatures_failed", {"path": self.signature_file_path, "error": str(e)}, level="error")
             return {}
 
     def get_all_signatures(self) -> dict:
@@ -79,26 +78,15 @@ class DatabaseManager:
 
     def log_exploitation_attempt(self, dslam_info: dict, strategy_name: str, success: bool):
         """
-        Logs the result of an exploitation attempt to the log file.
-
-        Args:
-            dslam_info: A dictionary containing information about the target DSLAM.
-            strategy_name: The name of the strategy that was executed.
-            success: A boolean indicating whether the attempt was successful.
+        Logs the result of an exploitation attempt.
         """
-        log_entry = {
-            "timestamp": logging.time.time(),
+        log_details = {
             "dslam_vendor": dslam_info.get('primary_vendor', 'unknown'),
             "dslam_model": dslam_info.get('model', 'unknown'),
             "strategy_name": strategy_name,
-            "success": success
+            "success": success,
         }
-        try:
-            with open(self.exploitation_log_path, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
-            self.logger.info(f"Logged exploitation attempt for strategy '{strategy_name}'. Success: {success}")
-        except IOError as e:
-            self.logger.error(f"Failed to write to exploitation log file at {self.exploitation_log_path}: {e}")
+        self.log_manager.log("exploitation_attempt", log_details)
 
     def get_strategy_success_rates(self) -> dict:
         """

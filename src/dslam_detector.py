@@ -8,6 +8,7 @@ from src.dns_analyzer import DNSAnalyzer
 from src.tr069_analyzer import TR069Analyzer
 from src.snmp_manager import SNMPManager
 from src.snmp_mib_library import SYSTEM_OIDS
+from src.log_manager import LogManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,13 +34,14 @@ class UniversalDSLAMDetector:
     # A final score must be above this threshold to be considered a valid result.
     FINAL_CONFIDENCE_THRESHOLD = 10
 
-    def __init__(self, target_ip, community_string, db_manager, ssh_interface=None):
+    def __init__(self, target_ip, community_string, db_manager, log_manager: LogManager, ssh_interface=None):
         """
         Initializes the detector.
         """
         self.target_ip = target_ip
         self.community_string = community_string
         self.db_manager = db_manager
+        self.log_manager = log_manager
         self.signatures = self.db_manager.get_all_signatures()
         self.ssh = ssh_interface # Keep for non-SNMP methods
 
@@ -48,7 +50,7 @@ class UniversalDSLAMDetector:
         self.dhcp_analyzer = DHCPAnalyzer(ssh_interface)
         self.dns_analyzer = DNSAnalyzer()
         self.tr069_analyzer = TR069Analyzer(ssh_interface)
-        self.snmp_manager = SNMPManager(host=target_ip, community=community_string)
+        self.snmp_manager = SNMPManager(log_manager=self.log_manager, host=target_ip, community=community_string)
 
         self.detection_methods = {
             'g_hs': self._detect_via_g_hs,
@@ -65,21 +67,21 @@ class UniversalDSLAMDetector:
         most likely vendor if the confidence exceeds a threshold.
         """
         if not self.signatures:
-            logging.error("Signature database is empty. Cannot perform detection.")
+            self.log_manager.log("identify_vendor_error", {"error": "Signature database is empty"}, level="error")
             return None
 
         all_findings = []
         for method_name in methods:
             if method_name in self.detection_methods:
-                logging.info(f"Attempting detection via {method_name}...")
+                self.log_manager.log("detection_method_attempt", {"method": method_name})
                 findings = self.detection_methods[method_name]()
                 if findings:
                     all_findings.extend(findings)
             else:
-                logging.warning(f"Detection method '{method_name}' not implemented.")
+                self.log_manager.log("detection_method_skipped", {"method": method_name}, level="warning")
 
         if not all_findings:
-            logging.warning("Could not identify DSLAM vendor with the specified methods.")
+            self.log_manager.log("identify_vendor_failed", {"reason": "No findings from any method"}, level="warning")
             return None
 
         vendor_scores = defaultdict(float)
@@ -95,7 +97,7 @@ class UniversalDSLAMDetector:
             vendor_evidence[vendor].append(finding)
 
         if not vendor_scores:
-            logging.warning("No vendor matched any signature.")
+            self.log_manager.log("identify_vendor_failed", {"reason": "No vendor matched any signature"}, level="warning")
             return None
 
         sorted_vendors = sorted(vendor_scores.items(), key=lambda item: item[1], reverse=True)
@@ -104,19 +106,18 @@ class UniversalDSLAMDetector:
             top_vendor, top_score = sorted_vendors[0]
             second_vendor, second_score = sorted_vendors[1]
             if top_score > 30 and (top_score - second_score) < 10:
-                logging.warning(
-                    f"Conflict detected: High confidence in multiple vendors. "
-                    f"Top: {top_vendor} ({top_score:.2f}%) with evidence: {vendor_evidence[top_vendor]}. "
-                    f"Second: {second_vendor} ({second_score:.2f}%) with evidence: {vendor_evidence[second_vendor]}."
-                )
+                self.log_manager.log("conflict_detected", {
+                    "top_vendor": top_vendor, "top_score": top_score,
+                    "second_vendor": second_vendor, "second_score": second_score,
+                }, level="warning")
 
         best_vendor, best_score = sorted_vendors[0]
 
         if best_score < self.FINAL_CONFIDENCE_THRESHOLD:
-            logging.warning(
-                f"Best match '{best_vendor}' with score {best_score:.2f}% "
-                f"did not meet the final confidence threshold of {self.FINAL_CONFIDENCE_THRESHOLD}%."
-            )
+            self.log_manager.log("identify_vendor_failed", {
+                "reason": "Best match did not meet confidence threshold",
+                "vendor": best_vendor, "score": best_score, "threshold": self.FINAL_CONFIDENCE_THRESHOLD
+            }, level="warning")
             return None
 
         return {

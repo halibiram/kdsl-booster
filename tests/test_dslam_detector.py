@@ -3,6 +3,7 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 from src.dslam_detector import UniversalDSLAMDetector
+from src.log_manager import LogManager
 
 # Mock findings from the various analyzers
 HUAWEI_GHS_FINDING = {"vendor": "huawei", "certainty": 95, "method": "g_hs", "raw_data": "VSI: MA5608T"}
@@ -36,6 +37,7 @@ def dslam_detector(mock_ssh_interface, signature_file):
     mock_db_manager = MagicMock()
     mock_db_manager.get_all_signatures.return_value = {} # Return empty sigs by default
 
+    log_manager = LogManager(secure_logging_enabled=False)
     with patch.object(UniversalDSLAMDetector, '_detect_via_g_hs', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_snmp', return_value=[]), \
          patch.object(UniversalDSLAMDetector, '_detect_via_dhcp', return_value=[]), \
@@ -47,7 +49,8 @@ def dslam_detector(mock_ssh_interface, signature_file):
             target_ip="127.0.0.1",
             community_string="public",
             db_manager=mock_db_manager,
-            ssh_interface=mock_ssh_interface
+            ssh_interface=mock_ssh_interface,
+            log_manager=log_manager
         )
 
         # Load real signatures for the test's purpose and set them on the instance
@@ -80,10 +83,9 @@ def test_identify_vendor_conflict_resolution(dslam_detector, caplog):
     dslam_detector._detect_via_snmp.return_value = [NOKIA_SNMP_FINDING] # Score: 30.0
     with caplog.at_level(logging.WARNING):
         result = dslam_detector.identify_vendor()
-        assert "Conflict detected" in caplog.text
-        assert "Top: huawei (33.25%)" in caplog.text
-        assert "Second: nokia_alcatel (30.00%)" in caplog.text
-        assert "evidence: " in caplog.text
+        assert "Event: conflict_detected" in caplog.text
+        assert "'top_vendor': 'huawei'" in caplog.text
+        assert "'second_vendor': 'nokia_alcatel'" in caplog.text
     assert result['primary_vendor'] == 'huawei'
 
 def test_identify_vendor_below_final_threshold(dslam_detector, caplog):
@@ -93,7 +95,8 @@ def test_identify_vendor_below_final_threshold(dslam_detector, caplog):
     with caplog.at_level(logging.WARNING):
         result = dslam_detector.identify_vendor()
         assert result is None
-        assert f"did not meet the final confidence threshold" in caplog.text
+        assert "Event: identify_vendor_failed" in caplog.text
+        assert "'reason': 'Best match did not meet confidence threshold'" in caplog.text
 
 def test_identify_vendor_no_findings(dslam_detector):
     """Tests that None is returned when no methods yield findings."""
