@@ -68,6 +68,7 @@ Some Python dependencies are not available in the Entware repository and must be
     ```bash
     docker build -t mips-builder .
     ```
+    > **Note:** The integrity of this Docker build is automatically verified by a GitHub Actions workflow on every push to the `main` branch.
 
 2.  **Extract the Compiled Wheels**:
     Create a `wheelhouse` directory in your project root and run the container to copy the compiled wheels into it:
