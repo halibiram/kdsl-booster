@@ -7,19 +7,21 @@ import json
 import csv
 import io
 from datetime import datetime
+from src.log_manager import LogManager
 
 class ReportGenerator:
     """
     Formats detection and capability analysis results into structured reports.
     """
 
-    def __init__(self, detection_result: dict | None):
+    def __init__(self, detection_result: dict | None, log_manager: LogManager | None = None):
         """
         Initializes the report generator with the full result dictionary.
         """
         self.result = detection_result if detection_result else {}
         self.timestamp = datetime.now().isoformat()
         self.capabilities = self.result.get('capability_analysis', {})
+        self.log_manager = log_manager
 
     def _format_section(self, title: str, lines: list[str], indent: str = "  ") -> list[str]:
         """Helper to format a section with a title and indented lines."""
@@ -84,6 +86,19 @@ class ReportGenerator:
 
         return lines
 
+    def _format_forensics_status(self) -> list[str]:
+        """Formats the forensics status section."""
+        if not self.log_manager:
+            return ["Secure Logging: Not configured"]
+
+        status = "Enabled" if self.log_manager.secure_logging_enabled else "Disabled"
+        cleanup = "Performed" if self.log_manager.secure_logging_enabled else "N/A"
+
+        return [
+            f"Secure Logging: {status}",
+            f"Log Cleanup: {cleanup}"
+        ]
+
     def generate_text_report(self) -> str:
         """
         Generates a comprehensive, human-readable text profile of the DSLAM.
@@ -108,6 +123,7 @@ class ReportGenerator:
         report_lines.extend(self._format_section("Retransmission Support", self._format_retransmission()))
         report_lines.extend(self._format_section("PSD Configuration", self._format_psd()))
         report_lines.extend(self._format_section("Optimization Recommendations", self._format_optimization_analysis()))
+        report_lines.extend(self._format_section("Forensics Status", self._format_forensics_status()))
 
         return "\n".join(report_lines)
 
@@ -152,7 +168,11 @@ class ReportGenerator:
             "Optimization Recommendations": self.capabilities.get('optimization_analysis', {
                 "warnings": [],
                 "recommendations": []
-            })
+            }),
+            "Forensics Status": {
+                "Secure Logging Enabled": self.log_manager.secure_logging_enabled if self.log_manager else False,
+                "Log Cleanup Performed": self.log_manager.secure_logging_enabled if self.log_manager else False,
+            }
         }
 
         full_report = {

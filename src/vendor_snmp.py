@@ -8,10 +8,12 @@ from src.snmp_manager import SNMPManager
 from src.snmp_mib_library import DSLAM_MIBS
 
 
+from src.log_manager import LogManager
+
 class BaseVendorSnmp:
     """A base class for vendor-specific SNMP interactions."""
-    def __init__(self, host, community='public', port=161):
-        self.snmp_manager = SNMPManager(host, community, port)
+    def __init__(self, log_manager: LogManager, host, community='public', port=161):
+        self.snmp_manager = SNMPManager(log_manager, host, community, port)
         self.vendor = "generic"
 
     def get_device_info(self):
@@ -26,8 +28,8 @@ class BaseVendorSnmp:
 
 class AdtranSnmp(BaseVendorSnmp):
     """SNMP interactions specific to Adtran DSLAMs."""
-    def __init__(self, host, community='public', port=161):
-        super().__init__(host, community, port)
+    def __init__(self, log_manager: LogManager, host, community='public', port=161):
+        super().__init__(log_manager, host, community, port)
         self.vendor = "adtran"
         self.oids = DSLAM_MIBS.get(self.vendor, {}).get("oids", {})
 
@@ -45,8 +47,8 @@ class AdtranSnmp(BaseVendorSnmp):
 
 class HuaweiSnmp(BaseVendorSnmp):
     """SNMP interactions specific to Huawei DSLAMs."""
-    def __init__(self, host, community='public', port=161):
-        super().__init__(host, community, port)
+    def __init__(self, log_manager: LogManager, host, community='public', port=161):
+        super().__init__(log_manager, host, community, port)
         self.vendor = "huawei"
         self.oids = DSLAM_MIBS.get(self.vendor, {}).get("oids", {})
 

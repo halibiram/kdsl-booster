@@ -5,15 +5,17 @@ command-line tools like snmpget, snmpset, and snmpwalk using the subprocess modu
 
 import subprocess
 import re
+from src.log_manager import LogManager
 
 class SNMPManager:
     """A wrapper class for simplifying SNMP operations via command-line tools."""
 
-    def __init__(self, host, community='public', port=161, timeout=2, retries=3, version='2c'):
+    def __init__(self, log_manager: LogManager, host, community='public', port=161, timeout=2, retries=3, version='2c'):
         """
         Initializes the SNMPManager.
 
         Args:
+            log_manager: An instance of the LogManager.
             host (str): The IP address or hostname of the SNMP agent.
             community (str): The SNMP community string.
             port (int): The port number for the SNMP agent.
@@ -21,6 +23,7 @@ class SNMPManager:
             retries (int): The number of retries for an SNMP request.
             version (str): The SNMP version to use ('1', '2c', '3').
         """
+        self.log_manager = log_manager
         self.host = host
         self.port = port
         self.community = community
@@ -39,13 +42,13 @@ class SNMPManager:
                 timeout=self.timeout
             )
         except subprocess.CalledProcessError as e:
-            print(f"SNMP command failed: {e.stderr}")
+            self.log_manager.log("snmp_command_failed", {"error": e.stderr}, level="error")
             return None
         except subprocess.TimeoutExpired:
-            print(f"SNMP command timed out: {' '.join(command_args)}")
+            self.log_manager.log("snmp_command_timeout", {"command": " ".join(command_args)}, level="error")
             return None
         except FileNotFoundError:
-            print(f"SNMP command not found. Ensure 'net-snmp' tools are installed.")
+            self.log_manager.log("snmp_command_not_found", {}, level="error")
             return None
 
     def get(self, oid):

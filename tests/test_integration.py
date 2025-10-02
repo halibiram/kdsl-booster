@@ -74,11 +74,13 @@ def test_full_end_to_end_workflow(signatures, mocker):
     mock_db_manager = MagicMock()
     mock_db_manager.get_all_signatures.return_value = signatures
 
+    mock_log_manager = MagicMock()
     detector = UniversalDSLAMDetector(
         target_ip="127.0.0.1",
         community_string="public",
         db_manager=mock_db_manager,
-        ssh_interface=mock_ssh
+        ssh_interface=mock_ssh,
+        log_manager=mock_log_manager
     )
     profile_analyzer = VDSLProfileAnalyzer(mock_ghs_analyzer, mock_ssh, signatures)
     vectoring_analyzer = VectoringAnalyzer(mock_ghs_analyzer, mock_ssh, signatures)
