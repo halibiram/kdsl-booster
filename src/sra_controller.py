@@ -18,9 +18,9 @@ class SRAState(Enum):
 
 class SRAController:
     """
-    Manages Seamless Rate Adaptation (SRA) by monitoring line conditions
-    and making intelligent adjustments to maintain an optimal balance between
-    performance, stability, and power consumption.
+    Manages Seamless Rate Adaptation (SRA) and adaptive latency by monitoring
+    line conditions and making intelligent adjustments to maintain an optimal balance
+    between performance, stability, and power consumption.
     """
 
     def __init__(self, hal: DslHalBase, traffic_monitor=None):
@@ -39,6 +39,7 @@ class SRAController:
         self.stable_since_time = time.time()
         self.last_check_time = time.time()
         self.current_power_boost_db = 0
+        self.current_latency_profile = 'stable'  # Start with a safe default
 
         # --- SRA Tuning Parameters ---
         self.monitoring_interval_s = 10
@@ -51,15 +52,21 @@ class SRAController:
         self.traffic_threshold_mbps = 50 # Traffic volume to trigger rate increase
         self.low_traffic_threshold_mbps = 5 # Traffic volume to trigger power saving
 
-    def _update_state(self):
+        # --- Adaptive Latency Parameters ---
+        self.latency_check_interval_s = 30 # How often to re-evaluate latency profile
+        self.crc_threshold_for_stable_latency = 5 # If new errors exceed this, switch to 'stable' profile
+        self.crc_threshold_for_fast_latency = 0 # New errors must be below this to switch to 'fast'
+
+    def _update_state_and_latency(self):
         """
-        Analyzes line statistics and traffic to determine the current state of the line.
-        This is the core decision-making logic of the controller.
+        Analyzes line statistics and traffic to determine the current state of the line
+        and the optimal latency profile.
         """
         current_stats = self.hal.get_line_stats()
         if not current_stats:
             logging.warning("Could not retrieve line stats. Assuming UNSTABLE.")
             self.state = SRAState.UNSTABLE
+            self._update_latency_profile(is_unstable=True)
             return
 
         current_crc_errors = current_stats.get('crc_errors', 0)
@@ -68,7 +75,8 @@ class SRAController:
         if new_errors > self.crc_error_threshold:
             logging.warning(f"Line has become unstable with {new_errors} new CRC errors.")
             self.state = SRAState.UNSTABLE
-            self.stable_since_time = time.time() # Reset stable timer
+            self.stable_since_time = time.time()  # Reset stable timer
+            self._update_latency_profile(is_unstable=True)
         else:
             if self.state == SRAState.UNSTABLE:
                 logging.info("Line has stabilized.")
@@ -83,11 +91,38 @@ class SRAController:
                 elif current_traffic < self.low_traffic_threshold_mbps:
                     self.state = SRAState.POWER_SAVING
                 else:
-                    self.state = SRAState.STABLE # Stable but no need to change rate
+                    self.state = SRAState.STABLE  # Stable but no need to change rate
             else:
                 self.state = SRAState.STABLE
 
+            # Now, check if we should change the latency profile
+            self._update_latency_profile(new_errors=new_errors)
+
         self.last_crc_errors = current_crc_errors
+
+    def _update_latency_profile(self, new_errors: int = 0, is_unstable: bool = False):
+        """Decides and applies the optimal latency profile based on line conditions."""
+        new_profile = self.current_latency_profile
+
+        if is_unstable or new_errors > self.crc_threshold_for_stable_latency:
+            if self.current_latency_profile != 'stable':
+                logging.warning(f"High CRC count ({new_errors}). Switching to 'stable' latency profile for safety.")
+                new_profile = 'stable'
+        else:
+            time_stable = time.time() - self.stable_since_time
+            if time_stable > self.stable_time_for_optimization_s and new_errors <= self.crc_threshold_for_fast_latency:
+                # Placeholder for more advanced logic to choose between 'fast' and 'gaming'
+                # For now, we prefer 'fast' as a general optimization.
+                if self.current_latency_profile != 'fast':
+                    logging.info(f"Line is very stable (new errors: {new_errors}). Switching to 'fast' latency profile.")
+                    new_profile = 'fast'
+
+        if new_profile != self.current_latency_profile:
+            success = self.hal.set_latency_profile(new_profile)
+            if success:
+                self.current_latency_profile = new_profile
+            else:
+                logging.error(f"Failed to switch latency profile to '{new_profile}'. Reverting to previous state.")
 
     def _get_current_traffic(self) -> float:
         """Gets the current traffic volume in Mbps. Returns a simulated value if no monitor is available."""
@@ -206,9 +241,11 @@ class SRAController:
         initial_stats = self.hal.get_line_stats()
         self.last_crc_errors = initial_stats.get('crc_errors', 0) if initial_stats else 0
         self.last_check_time = start_time
+        # Set initial latency profile
+        self.hal.set_latency_profile(self.current_latency_profile)
 
         while self.is_running and time.time() < end_time:
-            self._update_state()
+            self._update_state_and_latency()
             self._run_state_action()
             time.sleep(self.monitoring_interval_s)
 
