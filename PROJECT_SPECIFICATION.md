@@ -1,3 +1,185 @@
+# Proje Spesifikasyonu: DSL Bypass Ultra v1.1
+
+## 1. Giriş
+
+Bu belge, **DSL Bypass Ultra v1.1** projesinin teknik spesifikasyonlarını, mimarisini, fazlarını ve veri modellerini detaylandırmaktadır. Projenin temel hedefi, Keenetic cihazlar üzerinde Entware ve SSH kullanarak kernel seviyesinde DSL hat parametrelerini manipüle etmek ve bu sayede standart VDSL2 profillerinin getirdiği hız limitlerini aşmaktır.
+
+Proje, DSLAM (Digital Subscriber Line Access Multiplexer) tespiti, güvenlik açığı analizi, strateji seçimi ve hedef odaklı sömürü (exploitation) adımlarını otomatikleştiren modüler bir yapıya sahiptir.
+
+## 2. Proje Fazları ve Geçiş Kriterleri
+
+Proje, bir hedefe yönelik operasyonları yöneten `ExploitPipeline` tarafından koordine edilen sıralı fazlardan oluşur. Her fazın başarıyla tamamlanması, bir sonraki faza geçiş için bir ön koşuldur.
+
+| Faz | Açıklama | Geçiş Kriterleri |
+| :-- | :--- | :--- |
+| **Faz 1: Tespit (Detection)** | Hedef ağdaki DSLAM'ın marka ve modelinin, çoklu yöntem (SNMP, G.hs, DNS vb.) kullanılarak yüksek doğrulukla tespit edilmesi. | - DSLAM satıcısının **%70'in üzerinde** bir birleşik güvenilirlik skoru ile tanımlanması.<br>- Tespit sonucunun, `ExploitPipeline` tarafından kullanılacak bir veri yapısı olarak formatlanması. |
+| **Faz 2: Strateji Seçimi (Strategy Selection)** | Tespit edilen DSLAM marka/modeline, bilinen hat karakteristiklerine (zayıflama, SNR) ve tanımlanmış operasyonel hedeflere (örn. "stealth modu") göre en uygun sömürü (exploit) stratejisinin seçilmesi. | - `ExploitationStrategyEngine`'in, veritabanından geçerli ve uygulanabilir bir strateji planı seçmesi.<br>- Seçilen stratejinin, `_execute_strategy` metodu tarafından işlenebilecek bir formatta olması. |
+| **Faz 3: Uygulama (Execution)** | Seçilen stratejinin, `KernelDSLManipulator` veya `GHSHandshakeSpoofer` gibi alt seviye araçlar kullanılarak kernel veya protokol seviyesinde uygulanması. | - Strateji adımlarının hata vermeden tamamlanması.<br>- Uygulama sonucunda, manipülasyonun başarılı veya başarısız olduğunu belirten bir sonuç nesnesinin dönmesi. |
+| **Faz 4: Doğrulama (Validation)** | Uygulanan manipülasyonun hattın durumu üzerindeki etkisinin (örn. hız artışı, stabilite) doğrulanması. | - `_validate_outcome` metodunun, uygulama (execution) sonucunda kritik bir hata olmadığını teyit etmesi.<br>- (Gelecekte) Hat parametrelerinin (SNR, hız) yeniden ölçülerek hedeflere ulaşılıp ulaşılmadığının kontrol edilmesi. |
+| **Faz 5: Raporlama ve Temizlik (Reporting & Cleanup)** | Tüm operasyonun sonuçlarının detaylı bir şekilde raporlanması ve `secure_logging` aktif ise adli bilişim izlerinin temizlenmesi. | - `ReportGenerator` tarafından metin ve JSON formatında raporların oluşturulması.<br>- Varsa, `SecureLogger`'ın temizlik operasyonlarını başarıyla tamamlaması. |
+
+## 3. Her Fazın Teknik Gereksinimleri
+
+### Faz 1: Tespit
+- **Gerekli Modüller:** `UniversalDSLAMDetector`, `SNMPManager`, `GHSHandshakeAnalyzer`, `DNSAnalyzer`, `DHCPAnalyzer`, `TR069Analyzer`.
+- **Veritabanı:** `vendor_signatures.json` içinde tanımlanmış olan satıcı imzalarına (SNMP OID, G.hs VSI, vb.) erişim.
+- **Yapılandırma:** Hedef IP adresi ve SNMP community string.
+
+### Faz 2: Strateji Seçimi
+- **Gerekli Modüller:** `ExploitationStrategyEngine`, `DatabaseManager`.
+- **Girdi:** Faz 1'den gelen tespit sonuçları ve canlı hat karakteristikleri (örn. `{ "snr_margin": 12.5, "attenuation": 18.0 }`).
+- **Mantık:** Strateji motoru, veritabanındaki (`exploits.db`) stratejileri, DSLAM modeli, başarı oranları ve "stealth" gereksinimlerine göre puanlar ve en yüksek puanlı olanı seçer.
+
+### Faz 3: Uygulama
+- **Gerekli Modüller:** `KernelDSLManipulator`, `GHSHandshakeSpoofer`, `EntwareSSHInterface`.
+- **Erişim:** Hedef Keenetic cihaza root yetkileriyle SSH erişimi.
+- **Araçlar:** Kernel seviyesi manipülasyon için Keenetic üzerinde `xdslctl` gibi komut satırı araçları veya doğrudan `/sys` ve `/proc` dosya sistemlerine erişim.
+
+### Faz 4: Doğrulama
+- **Gerekli Modüller:** `ExploitPipeline` içindeki `_validate_outcome` metodu.
+- **Mantık:** Uygulama fazından dönen sonuç nesnesindeki `error` alanlarını kontrol eder. Gelecekte, hat metriklerini yeniden okuyarak beklenen değişikliğin gerçekleşip gerçekleşmediğini kontrol edecek mekanizmalar eklenebilir.
+
+### Faz 5: Raporlama ve Temizlik
+- **Gerekli Modüller:** `ReportGenerator`, `LogManager`, `SecureLogger`.
+- **Çıktı:** Standartlaştırılmış JSON ve okunabilir metin formatında operasyon raporları.
+- **Güvenlik:** `secure_logging` bayrağı aktif edildiğinde, `SecureLogger` sahte loglar üretir ve asıl log dosyasını güvenli bir şekilde siler.
+
+## 4. API Referansları
+
+Bu bölümde, projenin anahtar sınıfları ve metodları listelenmektedir.
+
+### `ExploitPipeline`
+- `run()`: Ana sömürü (exploit) iş akışını baştan sona çalıştırır.
+- `_execute_strategy(strategy_plan: dict)`: Verilen strateji planını uygular.
+- `_validate_outcome(execution_result: dict)`: Uygulama sonucunun başarılı olup olmadığını doğrular.
+
+### `UniversalDSLAMDetector`
+- `identify_vendor(methods: list)`: Belirtilen yöntemleri kullanarak DSLAM satıcısını tespit eder ve detaylı bir sonuç nesnesi döndürür. (Bkz. Veri Modelleri)
+
+### `ExploitationStrategyEngine`
+- `select_strategy(line_characteristics: dict, stealth_mode: bool)`: Verilen koşullara en uygun stratejiyi seçer.
+
+### `KernelDSLManipulator`
+- `set_target_profile(target_rate_mbps: int, target_distance_m: int)`: Statik bir hedef hıza ve mesafeye göre hat parametrelerini ayarlar.
+- `dynamically_reduce_snr(target_snr_floor_db: float)`: SNR marjını dinamik olarak hedeflenen taban seviyesine düşürür.
+
+### `GHSHandshakeSpoofer`
+- `inject_capability_bits(capabilities: dict)`: G.hs el sıkışma fazında, modemin yeteneklerini (örn. VDSL2 profil 35b desteği) sahte olarak raporlamasını sağlar.
+
+## 5. Mimari Akış Şeması
+
+Aşağıda, `ExploitPipeline`'ın temel iş akışını gösteren metin tabanlı bir diyagram yer almaktadır.
+
+```
+[Başla]
+   |
+   v
+[Faz 1: UniversalDSLAMDetector.identify_vendor()]
+   |
+   +-- [Başarılı?] --+
+   | (Güven > %70)   |
+   v                 v
+[Faz 2: ExploitationStrategyEngine.select_strategy()]  [Hata: Tespit Başarısız] -> [Bitir]
+   |
+   +-- [Strateji Bulundu?] --+
+   |                        |
+   v                        v
+[Faz 3: ExploitPipeline._execute_strategy()]      [Hata: Strateji Bulunamadı] -> [Bitir]
+   |
+   +-- [Uygulama Başarılı?] --+
+   |                         |
+   v                         v
+[Faz 4: ExploitPipeline._validate_outcome()]       [Hata: Uygulama Başarısız] -> [Bitir]
+   |
+   +-- [Doğrulama Başarılı?] --+
+   |                          |
+   v                          v
+[Faz 5: ReportGenerator.generate_report()]        [Durum: Başarısız]
+   |
+   v
+[Faz 5: SecureLogger.cleanup() (isteğe bağlı)]
+   |
+   v
+[Bitir]
+```
+
+## 6. Veri Modelleri
+
+Proje boyunca kullanılan temel veri yapıları aşağıda açıklanmıştır.
+
+### DSLAM Tespit Sonucu (`identify_vendor` dönüş değeri)
+
+Bu nesne, `UniversalDSLAMDetector` tarafından üretilir ve tüm tespit sürecinin sonucunu kapsar.
+
+```json
+{
+  "primary_vendor": "huawei",
+  "overall_confidence": 92.5,
+  "contributing_methods": [
+    {
+      "vendor": "huawei",
+      "certainty": 100,
+      "method": "snmp",
+      "raw_data": "1.3.6.1.4.1.2011"
+    },
+    {
+      "vendor": "huawei",
+      "certainty": 95,
+      "method": "g_hs",
+      "raw_data": "VSI: MA5608T"
+    }
+  ],
+  "all_results": {
+    "huawei": 92.5,
+    "zte": 15.0
+  }
+}
+```
+- **`primary_vendor`**: En yüksek skoru alan ve birincil olarak kabul edilen satıcı.
+- **`overall_confidence`**: Birincil satıcının, tüm yöntemlerden gelen ağırlıklı puanlarının toplamı.
+- **`contributing_methods`**: Birincil satıcının tespitine katkıda bulunan tüm kanıtların listesi. Her kanıt, hangi yöntemle (`method`), ne kadar kesinlikte (`certainty`) ve hangi ham veriyle (`raw_data`) bulunduğunu belirtir.
+- **`all_results`**: Tespit edilen tüm potansiyel satıcıların ve aldıkları toplam puanların bir sözlüğü.
+
+### Strateji Planı (`select_strategy` dönüş değeri)
+
+Bu nesne, `ExploitationStrategyEngine` tarafından seçilen ve `_execute_strategy` tarafından uygulanacak olan eylem planını tanımlar.
+
+```json
+{
+  "name": "Huawei MA5608T Aggressive Profile Injection",
+  "type": "multi_vector",
+  "dslam_vendor": "huawei",
+  "dslam_model": "MA5608T",
+  "score": 95,
+  "steps": [
+    {
+      "action": "ghs_handshake_spoof",
+      "params": {
+        "profile_35b_support": true,
+        "g_vector_support": true
+      }
+    },
+    {
+      "action": "kernel_manipulation",
+      "params": {
+        "strategy": "dynamic_reduce",
+        "target_snr_floor_db": 2.5
+      }
+    }
+  ]
+}
+```
+- **`name`**: Stratejinin okunabilir adı.
+- **`type`**: Stratejinin türü (`multi_vector`, `kernel_manipulation` vb.). Bu, `_execute_strategy` içindeki dağıtıcının (dispatcher) hangi mantığı kullanacağını belirler.
+- **`score`**: Stratejinin, motor tarafından hesaplanan uygunluk puanı.
+- **`steps`**: Stratejinin uygulanması için gereken sıralı adımlar. Her adım, bir eylem (`action`) ve o eylemin gerektirdiği parametreleri (`params`) içerir.
+
+---
+
+## Ek: Orijinal Teknik Vizyon ve Araştırma Notları
+
+(Bu bölüm, projenin ilk taslak belgesindeki orijinal beyin fırtınası ve araştırma notlarını içerir.)
+
 # DSL Bypass Ultra v1.1 - Entware SSH Ultra Advanced Spoofing
 
 ## 🚀 Entware SSH Tabanlı Gelişmiş Spoofing Sistemi
