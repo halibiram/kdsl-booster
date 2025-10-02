@@ -7,7 +7,6 @@ that orchestrate the manipulation of kernel parameters to achieve the desired
 line performance.
 """
 import time
-import time
 import logging
 import numpy as np
 
@@ -17,6 +16,7 @@ from src.advanced_dsl_physics import AdvancedDSLPhysics
 from src.ghs_packet_crafter import craft_fake_cl_message
 from src.sra_controller import SRAController
 from src.bonding_exploiter import BondingExploiter
+from src.evasion import EvasionManager
 
 
 class GHSHandshakeSpoofer:
@@ -94,6 +94,8 @@ class KernelDSLManipulator:
         if not self.hal:
             raise RuntimeError("Failed to detect Keenetic hardware or initialize HAL. Cannot proceed.")
 
+        self.evasion_manager = EvasionManager(ssh_interface, self.hal)
+
     def _find_optimal_snr_for_rate(self, target_rate_mbps: float, distance_m: int) -> float:
         """
         Performs an iterative search to find the minimum SNR required for the target rate.
@@ -160,19 +162,19 @@ class KernelDSLManipulator:
         print(f"Manipulation results: {results}")
         return results
 
-    def dynamically_reduce_snr(self, target_snr_floor_db: float, step_db: float = 0.5, step_interval_s: int = 5) -> dict:
+    def dynamically_reduce_snr(self, target_snr_floor_db: float, duration_s: int = 30) -> dict:
         """
-        Gradually reduces the SNR margin from its current value to a target floor.
+        Gradually reduces the SNR margin from its current value to a target floor
+        using the EvasionManager to perform the change stealthily.
 
         Args:
             target_snr_floor_db: The lowest SNR margin to attempt.
-            step_db: The amount to decrease the SNR by in each step (in dB).
-            step_interval_s: The time to wait between decrements.
+            duration_s: The total time the adaptation should take.
 
         Returns:
-            A dictionary reporting the final state.
+            A dictionary reporting the final state after the adaptation.
         """
-        logging.info("Starting dynamic SNR margin reduction...")
+        logging.info("Starting dynamic SNR margin reduction via EvasionManager...")
         current_snr = self.hal.get_snr_margin()
         if current_snr is None:
             logging.error("Could not retrieve initial SNR margin. Aborting.")
@@ -180,19 +182,17 @@ class KernelDSLManipulator:
 
         logging.info(f"Initial SNR: {current_snr:.1f} dB. Target floor: {target_snr_floor_db:.1f} dB.")
 
-        final_snr = current_snr
-        for target_snr in np.arange(current_snr, target_snr_floor_db - step_db, -step_db):
-            logging.info(f"Setting SNR margin to {target_snr:.1f} dB...")
-            snr_register_value = int(target_snr * 10)
-            success = self.hal.set_snr_margin(snr_register_value)
-            if not success:
-                logging.error(f"Failed to set SNR to {target_snr:.1f} dB. Stopping reduction.")
-                break
-            final_snr = target_snr
-            logging.info(f"Waiting for {step_interval_s} seconds...")
-            time.sleep(step_interval_s)
+        self.evasion_manager.gradually_adapt_parameter(
+            setter_func=self.hal.set_snr_margin,
+            param_name="SNR Margin",
+            current_value=current_snr,
+            target_value=target_snr_floor_db,
+            duration_s=duration_s
+        )
 
-        logging.info(f"Dynamic SNR reduction finished. Final SNR margin: {final_snr:.1f} dB.")
+        # The adaptation runs, and we can check the final state.
+        final_snr = self.hal.get_snr_margin()
+        logging.info(f"Dynamic SNR reduction process finished. Final SNR margin: {final_snr:.1f} dB.")
         return {"success": True, "final_snr": final_snr}
 
     def adapt_to_line_quality(self, monitoring_duration_s: int = 300) -> dict:
@@ -838,3 +838,59 @@ class KernelDSLManipulator:
 
         logging.info(f"Bonding exploitation finished. Results: {results}")
         return results
+
+    # --- Evasion and Anti-Detection Methods ---
+
+    def engage_stealth_mode(
+        self,
+        snr_fluctuation_db: float = 0.2,
+        attenuation_fluctuation_db: float = 0.1,
+        interval_s: int = 15
+    ):
+        """
+        Starts the 'Normal Behavior Emulation' to make the line appear natural.
+
+        Args:
+            snr_fluctuation_db: Max random fluctuation for SNR.
+            attenuation_fluctuation_db: Max random fluctuation for attenuation.
+            interval_s: How often to apply fluctuations.
+        """
+        logging.info("Engaging stealth mode (normal behavior emulation)...")
+        self.evasion_manager.start_behavior_emulation(
+            snr_fluctuation_db=snr_fluctuation_db,
+            attenuation_fluctuation_db=attenuation_fluctuation_db,
+            interval_s=interval_s
+        )
+
+    def disengage_stealth_mode(self):
+        """
+        Stops the 'Normal Behavior Emulation'.
+        """
+        logging.info("Disengaging stealth mode.")
+        self.evasion_manager.stop_behavior_emulation()
+
+    def engage_monitoring_bypass(self, acs_url: str | None = None, snmp_ip: str | None = None) -> bool:
+        """
+        Engages the monitoring bypass by setting up firewall rules.
+
+        Args:
+            acs_url: The URL of the ISP's TR-069 ACS.
+            snmp_ip: The IP address of the ISP's SNMP manager.
+
+        Returns:
+            True if the bypass rules were applied successfully, False otherwise.
+        """
+        logging.info("Engaging monitoring bypass...")
+        return self.evasion_manager.bypass_monitoring(acs_url=acs_url, snmp_ip=snmp_ip)
+
+    def detect_isp_activity(self) -> dict:
+        """
+        Runs a check for active ISP monitoring.
+
+        Returns:
+            A dictionary indicating if TR-069 or SNMP activity was found.
+        """
+        logging.info("Running ISP activity detection...")
+        tr069_active = self.evasion_manager.detect_tr069_activity()
+        snmp_active = self.evasion_manager.detect_snmp_polling()
+        return {"tr069_detected": tr069_active, "snmp_detected": snmp_active}
