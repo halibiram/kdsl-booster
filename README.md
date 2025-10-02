@@ -50,6 +50,62 @@ python3 main.py
 
 You will see output detailing each step of the process, culminating in an AI-powered prediction for the optimal DSL parameters to achieve a target speed of 125 Mbps.
 
+### 🔧 Entware MIPS Installation
+
+This project can be run on MIPS-based devices (like many routers) that support Entware. Due to package availability limitations on this platform, the AI-powered optimization features are not available, but the core functionalities will work.
+
+#### Prerequisites
+
+- A MIPS-based device with Entware installed and a working `opkg` package manager.
+- A separate machine with Docker installed to cross-compile Python packages.
+
+#### Step 1: Cross-Compile Python Wheels
+
+Some Python dependencies are not available in the Entware repository and must be cross-compiled. A `Dockerfile` is provided to simplify this process.
+
+1.  **Build the Docker Image**:
+    On a machine with Docker, run the following command from the project root:
+    ```bash
+    docker build -t mips-builder .
+    ```
+    > **Note:** The integrity of this Docker build is automatically verified by a GitHub Actions workflow on every push to the `main` branch.
+
+2.  **Extract the Compiled Wheels**:
+    Create a `wheelhouse` directory in your project root and run the container to copy the compiled wheels into it:
+    ```bash
+    mkdir wheelhouse
+    docker run --rm -v $(pwd)/wheelhouse:/opt/wheelhouse mips-builder
+    ```
+    The `wheelhouse` directory will now contain the MIPS-compatible Python wheels.
+
+#### Step 2: Set Up the MIPS Device
+
+1.  **Install Python and Pip**:
+    On your MIPS device, install Python 3 and pip using `opkg`:
+    ```bash
+    opkg update
+    opkg install python3 python3-pip
+    ```
+
+2.  **Copy Project Files**:
+    Transfer the entire project directory, including the `wheelhouse` directory, to your MIPS device (e.g., using `scp`).
+
+#### Step 3: Install Python Dependencies
+
+1.  Navigate to the project directory on your MIPS device.
+
+2.  Install the cross-compiled Python packages using the wheels you created:
+    ```bash
+    pip3 install --no-index --find-links=./wheelhouse -r requirements-mips.txt
+    ```
+
+#### Step 4: Run the Application
+
+You can now run the main application:
+```bash
+python3 main.py
+```
+
 ## 📄 Project Specification
 
 For a deep dive into the project's technical architecture, phase-by-phase roadmap, and detailed specifications, please see the `PROJECT_SPECIFICATION.md` file.
