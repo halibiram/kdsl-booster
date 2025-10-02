@@ -7,24 +7,29 @@ extended to connect to a real database system in the future.
 """
 import json
 import logging
+import os
+from collections import defaultdict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DatabaseManager:
     """
-    Manages access to the vendor signature database.
+    Manages access to the vendor signature database and logs exploitation attempts.
     """
 
-    def __init__(self, signature_file_path: str = 'src/vendor_signatures.json'):
+    def __init__(self, signature_file_path: str = 'src/vendor_signatures.json', exploitation_log_path: str = 'exploitation_log.json'):
         """
-        Initializes the manager and loads the signature data.
+        Initializes the manager, loads signature data, and sets up the exploitation log.
 
         Args:
             signature_file_path: The path to the JSON file containing signatures.
+            exploitation_log_path: The path to the file for logging exploitation attempts.
         """
         self.signature_file_path = signature_file_path
+        self.exploitation_log_path = exploitation_log_path
         self.signatures = self._load_signatures()
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def _load_signatures(self) -> dict:
         """
@@ -71,3 +76,67 @@ class DatabaseManager:
         """
         vendor_data = self.get_vendor_signature(vendor)
         return vendor_data.get("exploits") if vendor_data else None
+
+    def log_exploitation_attempt(self, dslam_info: dict, strategy_name: str, success: bool):
+        """
+        Logs the result of an exploitation attempt to the log file.
+
+        Args:
+            dslam_info: A dictionary containing information about the target DSLAM.
+            strategy_name: The name of the strategy that was executed.
+            success: A boolean indicating whether the attempt was successful.
+        """
+        log_entry = {
+            "timestamp": logging.time.time(),
+            "dslam_vendor": dslam_info.get('primary_vendor', 'unknown'),
+            "dslam_model": dslam_info.get('model', 'unknown'),
+            "strategy_name": strategy_name,
+            "success": success
+        }
+        try:
+            with open(self.exploitation_log_path, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+            self.logger.info(f"Logged exploitation attempt for strategy '{strategy_name}'. Success: {success}")
+        except IOError as e:
+            self.logger.error(f"Failed to write to exploitation log file at {self.exploitation_log_path}: {e}")
+
+    def get_strategy_success_rates(self) -> dict:
+        """
+        Calculates the success rate of each strategy based on the exploitation log.
+
+        Returns:
+            A dictionary where keys are strategy names and values are dictionaries
+            containing 'successes', 'failures', and 'rate'.
+        """
+        if not os.path.exists(self.exploitation_log_path):
+            return {}
+
+        strategy_stats = defaultdict(lambda: {'successes': 0, 'failures': 0})
+        try:
+            with open(self.exploitation_log_path, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        strategy_name = entry.get("strategy_name")
+                        if not strategy_name:
+                            continue
+
+                        if entry.get("success"):
+                            strategy_stats[strategy_name]['successes'] += 1
+                        else:
+                            strategy_stats[strategy_name]['failures'] += 1
+                    except json.JSONDecodeError:
+                        self.logger.warning(f"Skipping malformed line in log file: {line.strip()}")
+                        continue
+        except IOError as e:
+            self.logger.error(f"Failed to read exploitation log file at {self.exploitation_log_path}: {e}")
+            return {}
+
+        # Calculate success rates
+        success_rates = {}
+        for name, stats in strategy_stats.items():
+            total = stats['successes'] + stats['failures']
+            rate = stats['successes'] / total if total > 0 else 0
+            success_rates[name] = {**stats, 'rate': rate}
+
+        return success_rates
