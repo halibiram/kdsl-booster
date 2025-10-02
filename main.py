@@ -231,6 +231,36 @@ def run_speed_cap_bypass(args):
         print("\n❌ Exploit finished with errors. The speed cap may not have been bypassed. ❌")
 
 
+def run_latency_optimization(args):
+    """Sets a specific latency profile on the modem."""
+    print(f"🚀 Initializing Latency Optimization Subsystem 🚀")
+    print(f"Attempting to set latency profile to: {args.profile}")
+
+    # --- Setup ---
+    try:
+        ssh_interface = EntwareSSHInterface(host=args.target_ip)
+        dsl_interface = KeeneticDSLInterface(ssh_interface)
+        hal = dsl_interface.get_hal()
+        if not hal:
+            print(f"❌ Failed to initialize HAL for target {args.target_ip}. Aborting.")
+            return
+        print(f"✅ Initialized with {hal.__class__.__name__} HAL.")
+    except Exception as e:
+        print(f"❌ Failed to initialize connection to {args.target_ip}: {e}")
+        return
+
+    # --- Execution ---
+    success = hal.set_latency_profile(args.profile)
+
+    if success:
+        print(f"\n✅ Successfully applied latency profile '{args.profile}'.")
+        print("The line may retrain for the changes to take effect.")
+    else:
+        print(f"\n❌ Failed to apply latency profile '{args.profile}'. Check logs for details.")
+
+    print("\n🎉 Latency optimization run finished. 🎉")
+
+
 def main():
     """
     Main entry point for the DSL Bypass Ultra framework.
@@ -333,6 +363,17 @@ def main():
     parser_bypass.add_argument('--profile', choices=['17a', '35b'], default='35b', help='The target VDSL2 profile to spoof.')
     parser_bypass.add_argument('--distance', type=int, default=50, help='The simulated line distance in meters to achieve higher speeds.')
     parser_bypass.set_defaults(func=run_speed_cap_bypass)
+
+    # Latency Optimization mode
+    parser_latency = subparsers.add_parser('latency', help='Set a specific latency optimization profile.')
+    parser_latency.add_argument('target_ip', help='The IP address of the target device.')
+    parser_latency.add_argument(
+        '--profile',
+        choices=['fast', 'gaming', 'stable'],
+        required=True,
+        help='The latency profile to apply.'
+    )
+    parser_latency.set_defaults(func=run_latency_optimization)
 
     args = parser.parse_args()
     args.func(args)

@@ -1,6 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 from src.entware_ssh import EntwareSSHInterface
+from src.latency_optimizer import LatencyOptimizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -311,6 +312,45 @@ class DslHalBase(ABC):
             True on success, False on failure.
         """
         pass
+
+    @abstractmethod
+    def set_interleaving(self, enabled: bool) -> bool:
+        """
+        Enables or disables interleaving (fast path).
+        Args:
+            enabled: True to enable interleaving, False for fast path.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    @abstractmethod
+    def set_inp(self, value: int) -> bool:
+        """
+        Sets the Impulse Noise Protection (INP) value.
+        Args:
+            value: The target INP value.
+        Returns:
+            True on success, False on failure.
+        """
+        pass
+
+    def set_latency_profile(self, profile: str) -> bool:
+        """
+        Applies a predefined latency optimization profile.
+        Args:
+            profile: The name of the profile ('fast', 'gaming', 'stable').
+        Returns:
+            True if the profile was applied successfully, False otherwise.
+        """
+        try:
+            optimizer = LatencyOptimizer(self)
+            optimizer.apply_profile(profile)
+            logging.info(f"Successfully applied latency profile: {profile}")
+            return True
+        except (ValueError, NotImplementedError) as e:
+            logging.error(f"Failed to apply latency profile '{profile}': {e}")
+            return False
 
 
 class BroadcomDslHal(DslHalBase):
@@ -697,6 +737,31 @@ class BroadcomDslHal(DslHalBase):
         logging.info(f"Set Broadcom bonding differential delay to {delay_ms} ms.")
         return True
 
+    def set_interleaving(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        state = "on" if enabled else "off"
+        command = f"{self.driver_path} configure --interleave {state}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom interleaving to {state}: {stderr}")
+            return False
+        logging.info(f"Broadcom interleaving set to {state}.")
+        return True
+
+    def set_inp(self, value: int) -> bool:
+        if not self.driver_path:
+            logging.error("Broadcom driver command not found.")
+            return False
+        command = f"{self.driver_path} configure --inp {value}"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Broadcom INP to {value}: {stderr}")
+            return False
+        logging.info(f"Broadcom INP set to {value}.")
+        return True
+
 
 class LantiqDslHal(DslHalBase):
     """
@@ -1044,6 +1109,31 @@ class LantiqDslHal(DslHalBase):
         logging.info(f"Set Lantiq bonding differential delay to {delay_ms} ms.")
         return True
 
+    def set_interleaving(self, enabled: bool) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        state = "1" if enabled else "0"
+        command = f"echo {state} > {self.driver_path}/interleaving_control"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq interleaving state: {stderr}")
+            return False
+        logging.info(f"Lantiq interleaving set to {'enabled' if enabled else 'disabled'}.")
+        return True
+
+    def set_inp(self, value: int) -> bool:
+        if not self.driver_path:
+            logging.error("Lantiq driver path not found.")
+            return False
+        command = f"echo {value} > {self.driver_path}/inp_control"
+        _, stderr = self.ssh.execute_command(command)
+        if stderr:
+            logging.error(f"Failed to set Lantiq INP value: {stderr}")
+            return False
+        logging.info(f"Lantiq INP set to {value}.")
+        return True
+
 
 # Maps Keenetic models to their corresponding DSL HAL implementation.
 CHIPSET_FAMILY_MAP = {
@@ -1063,7 +1153,7 @@ class KeeneticDSLInterface:
 
     def _detect_hal_class(self) -> type[DslHalBase] | None:
         if self._hal_class:
-            return self._hal_class
+            return self.hal_class
 
         logging.info("Detecting Keenetic hardware model to determine HAL class...")
         command = "cat /proc/device-tree/model"

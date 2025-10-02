@@ -28,12 +28,12 @@ class TestSRAController(unittest.TestCase):
     def test_state_becomes_unstable_on_crc_errors(self):
         """Test that the state transitions to UNSTABLE when CRC errors exceed the threshold."""
         # Initial state check
-        self.controller._update_state()
+        self.controller._update_state_and_latency()
         self.assertEqual(self.controller.state, SRAState.STABLE)
 
         # Simulate a spike in CRC errors
         self.mock_hal.get_line_stats.return_value = {'crc_errors': self.controller.crc_error_threshold + 1}
-        self.controller._update_state()
+        self.controller._update_state_and_latency()
 
         self.assertEqual(self.controller.state, SRAState.UNSTABLE)
 
@@ -57,7 +57,7 @@ class TestSRAController(unittest.TestCase):
 
         # Simulate high traffic
         with patch.object(self.controller, '_get_current_traffic', return_value=self.controller.traffic_threshold_mbps + 1):
-            self.controller._update_state()
+            self.controller._update_state_and_latency()
 
         self.assertEqual(self.controller.state, SRAState.OPTIMIZING_UP)
 
@@ -81,7 +81,7 @@ class TestSRAController(unittest.TestCase):
 
         # Simulate low traffic
         with patch.object(self.controller, '_get_current_traffic', return_value=self.controller.low_traffic_threshold_mbps - 1):
-            self.controller._update_state()
+            self.controller._update_state_and_latency()
 
         self.assertEqual(self.controller.state, SRAState.POWER_SAVING)
 
